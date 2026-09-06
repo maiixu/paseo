@@ -30,7 +30,7 @@ import { ConnectionOfferSchema, type ConnectionOffer } from "@getpaseo/protocol/
 import { shouldUseDesktopDaemon } from "@/desktop/daemon/desktop-daemon";
 import { isWeb } from "@/constants/platform";
 import { connectToDaemon } from "@/utils/test-daemon-connection";
-import { getOrCreateClientId } from "@/utils/client-id";
+import { getOrCreateConnectionClientId } from "@/utils/client-id";
 import { z } from "zod";
 import { readValidatedJson, readValidatedString } from "@/storage/validated-storage";
 import {
@@ -569,7 +569,7 @@ function createDefaultDeps(): HostRuntimeControllerDeps {
         capabilities: appCapabilities,
         trace: nativePerformanceTrace,
       }),
-    getClientId: () => getOrCreateClientId(),
+    getClientId: () => getOrCreateConnectionClientId(),
     mountClientHandlers: ({ client, host }) => {
       const unmountServerData = mountServerDataPushRouter({
         client,

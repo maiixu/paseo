@@ -33,11 +33,20 @@ export function useClientActivity({
 }: ClientActivityOptions): void {
   const onAppResumedRef = useRef(onAppResumed);
   onAppResumedRef.current = onAppResumed;
+  const clientRef = useRef(client);
+  clientRef.current = client;
 
   const trackerRef = useRef<ClientActivityTracker | null>(null);
   if (!trackerRef.current) {
     trackerRef.current = createClientActivityTracker({
-      client,
+      client: {
+        get isConnected() {
+          return clientRef.current.isConnected;
+        },
+        sendHeartbeat(payload) {
+          clientRef.current.sendHeartbeat(payload);
+        },
+      },
       deviceType: isWeb ? "web" : "mobile",
       initialFocusedAgentId: focusedAgentId,
       initialFocusedTerminalId: focusedTerminalId,
