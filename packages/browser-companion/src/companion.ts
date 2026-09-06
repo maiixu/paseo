@@ -142,10 +142,15 @@ export function createCompanion({ browser, now }: CompanionOptions) {
     current.traces = current.traces.slice(-100);
   }
 
-  async function removeBinding(current: Session, binding: Binding): Promise<void> {
+  async function releasePageRetention(binding: Binding): Promise<void> {
     if (binding.previousAutoDiscardable !== null) {
       await browser.updateTab(binding.tabId, { autoDiscardable: binding.previousAutoDiscardable });
+      binding.previousAutoDiscardable = null;
     }
+  }
+
+  async function removeBinding(current: Session, binding: Binding): Promise<void> {
+    await releasePageRetention(binding);
     current.bindings = current.bindings.filter((candidate) => candidate.tabId !== binding.tabId);
   }
 
@@ -162,6 +167,10 @@ export function createCompanion({ browser, now }: CompanionOptions) {
       const tab = await browser.getTab(binding.tabId);
       if (tab === null || !matchesPage(binding, tab)) {
         await removeBinding(current, binding);
+        continue;
+      }
+      // A loaded page without its bridge may have changed panes without changing its URL.
+      if (!binding.live && !tab.discarded) {
         continue;
       }
       matches.push({ binding, tab });
@@ -302,9 +311,8 @@ export function createCompanion({ browser, now }: CompanionOptions) {
         binding.previousAutoDiscardable = originalAutoDiscardable;
         await browser.updateTab(sender.tabId, { autoDiscardable: false });
       }
-      if (!keepPage && binding.previousAutoDiscardable !== null) {
-        await browser.updateTab(sender.tabId, { autoDiscardable: binding.previousAutoDiscardable });
-        binding.previousAutoDiscardable = null;
+      if (!keepPage) {
+        await releasePageRetention(binding);
       }
       return null;
     });
@@ -320,8 +328,10 @@ export function createCompanion({ browser, now }: CompanionOptions) {
         return;
       }
       const tab = await browser.getTab(sender.tabId);
-      if (tab !== null && tab.discarded && matchesPage(binding, tab)) {
+      if (tab !== null && matchesPage(binding, tab)) {
+        // Port disconnection can precede Chrome's discarded-state update.
         binding.live = false;
+        await releasePageRetention(binding);
         return;
       }
       await removeBinding(current, binding);
@@ -377,6 +387,9 @@ export function createCompanion({ browser, now }: CompanionOptions) {
         const tab = await browser.getTab(binding.tabId);
         if (tab === null || !matchesPage(binding, tab)) {
           await removeBinding(current, binding);
+          continue;
+        }
+        if (!binding.live && !tab.discarded) {
           continue;
         }
         const update: chrome.tabs.UpdateProperties = { active: true };

@@ -73,6 +73,7 @@ function setup() {
   let notificationFailure = false;
   let focusedWindow = 10;
   let closeOnActivation: number | null = null;
+  let restoreAfterLookup: number | null = null;
   let time = 100;
   const browser: CompanionBrowser = {
     async readSession() {
@@ -82,7 +83,16 @@ function setup() {
       stored = structuredClone(session);
     },
     async getTab(tabId) {
-      return tabs.get(tabId) ?? null;
+      const tab = tabs.get(tabId);
+      if (tab === undefined) {
+        return null;
+      }
+      const snapshot = { ...tab };
+      if (restoreAfterLookup === tabId) {
+        tab.discarded = false;
+        restoreAfterLookup = null;
+      }
+      return snapshot;
     },
     async updateTab(tabId, update) {
       if (closeOnActivation === tabId && update.active) {
@@ -198,6 +208,9 @@ function setup() {
     closeWhenActivated(id: number) {
       closeOnActivation = id;
     },
+    restoreAfterNextLookup(id: number) {
+      restoreAfterLookup = id;
+    },
   };
 }
 
@@ -300,6 +313,61 @@ describe("Paseo browser companion", () => {
     });
     expect(env.created).toEqual([]);
     expect(env.requireTab(2).url).toBe(browserNotificationTarget(ORIGIN, AGENT_B));
+  });
+
+  it("retains the target when port disconnection arrives before the discarded flag", async () => {
+    const env = setup();
+    env.requireTab(1).url = `${ORIGIN}/h/local/workspace/workspace-a`;
+    await env.register(1, AGENT_A);
+    await env.notify();
+    await env.companion.disconnect(env.sender(1));
+    expect(env.requireTab(1).autoDiscardable).toBe(true);
+    env.requireTab(1).discarded = true;
+    await env.companion.tabUpdated(1, { discarded: true }, env.requireTab(1));
+    const resumed = createCompanion(env.options);
+    await resumed.click(env.notifications[0].id);
+    expect(env.updates).toContainEqual({
+      tabId: 1,
+      update: { active: true, url: browserNotificationTarget(ORIGIN, AGENT_A) },
+    });
+    expect(env.created).toEqual([]);
+    expect(env.requireTab(2).url).toBe(browserNotificationTarget(ORIGIN, AGENT_B));
+  });
+
+  it("does not suppress or reuse a disconnected loaded page with an unverified active pane", async () => {
+    const env = setup();
+    await env.register(1, AGENT_A);
+    await env.companion.disconnect(env.sender(1));
+    env.requireTab(1).active = true;
+    env.requireTab(2).active = false;
+    expect(await env.notify()).toEqual(delivery("accepted"));
+    await env.companion.click(env.notifications[0].id);
+    expect(env.updates.filter(({ tabId, update }) => tabId === 1 && update.active)).toEqual([]);
+    expect(env.created).toEqual([browserNotificationTarget(ORIGIN, AGENT_A)]);
+  });
+
+  it("rechecks a disconnected target that reloads between selection and activation", async () => {
+    const env = setup();
+    await env.register(1, AGENT_A);
+    await env.notify();
+    env.requireTab(1).discarded = true;
+    await env.companion.disconnect(env.sender(1));
+    env.restoreAfterNextLookup(1);
+    await env.companion.click(env.notifications[0].id);
+    expect(env.updates.filter(({ tabId, update }) => tabId === 1 && update.active)).toEqual([]);
+    expect(env.created).toEqual([browserNotificationTarget(ORIGIN, AGENT_A)]);
+  });
+
+  it("invalidates a disconnected mapping when a same-URL reload starts", async () => {
+    const env = setup();
+    await env.register(1, AGENT_A);
+    await env.notify();
+    await env.companion.disconnect(env.sender(1));
+    await env.companion.tabUpdated(1, { status: "loading" }, env.requireTab(1));
+    env.requireTab(1).discarded = true;
+    await env.companion.tabUpdated(1, { discarded: true }, env.requireTab(1));
+    await env.companion.click(env.notifications[0].id);
+    expect(env.created).toEqual([browserNotificationTarget(ORIGIN, AGENT_A)]);
   });
 
   it("prefers a live matching tab over a more recently active discarded copy", async () => {
