@@ -7,15 +7,20 @@ import { useClientActivity } from "./use-client-activity";
 
 const START = new Date("2026-09-06T12:00:00.000Z");
 
-function mountActivityTracker() {
+function createHeartbeatClient(clientId = "activity-test") {
   // Observe the hook's heartbeat contract without opening a network connection.
-  const client = new DaemonClient({ url: "ws://paseo.invalid", clientId: "activity-test" });
-  vi.spyOn(client, "isConnected", "get").mockReturnValue(true);
+  const client = new DaemonClient({ url: "ws://paseo.invalid", clientId });
+  const connected = vi.spyOn(client, "isConnected", "get").mockReturnValue(true);
   const sendHeartbeat = vi.spyOn(client, "sendHeartbeat").mockImplementation(() => {});
   vi.spyOn(client, "subscribeConnectionStatus").mockImplementation((listener) => {
     listener({ status: "connected" });
     return () => {};
   });
+  return { client, sendHeartbeat, connected };
+}
+
+function mountActivityTracker() {
+  const { client, sendHeartbeat } = createHeartbeatClient();
   const hook = renderHook(() =>
     useClientActivity({ client, focusedAgentId: "agent-1", focusedTerminalId: null }),
   );
@@ -143,5 +148,76 @@ describe("browser client activity", () => {
     });
 
     expect(sendHeartbeat).not.toHaveBeenCalled();
+  });
+
+  it("moves heartbeats to a replacement client without resetting activity or its throttle", () => {
+    const original = createHeartbeatClient("original");
+    const replacement = createHeartbeatClient("replacement");
+    const { rerender } = renderHook(
+      ({ client }) =>
+        useClientActivity({ client, focusedAgentId: "agent-1", focusedTerminalId: null }),
+      {
+        initialProps: { client: original.client },
+      },
+    );
+    vi.setSystemTime(new Date(START.getTime() + 500));
+    act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "x" })));
+    original.sendHeartbeat.mockClear();
+    original.connected.mockReturnValue(false);
+    vi.setSystemTime(new Date(START.getTime() + 1000));
+
+    rerender({ client: replacement.client });
+
+    expect(replacement.sendHeartbeat).toHaveBeenCalledExactlyOnceWith({
+      deviceType: "web",
+      focusedAgentId: "agent-1",
+      focusedTerminalId: null,
+      lastActivityAt: new Date(START.getTime() + 500).toISOString(),
+      appVisible: true,
+      appVisibilityChangedAt: START.toISOString(),
+    });
+    replacement.sendHeartbeat.mockClear();
+    vi.setSystemTime(new Date(START.getTime() + 1500));
+    act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "y" })));
+    expect(replacement.sendHeartbeat).not.toHaveBeenCalled();
+
+    act(() => vi.advanceTimersByTime(15_000));
+
+    expect(replacement.sendHeartbeat).toHaveBeenCalledExactlyOnceWith({
+      deviceType: "web",
+      focusedAgentId: "agent-1",
+      focusedTerminalId: null,
+      lastActivityAt: new Date(START.getTime() + 1500).toISOString(),
+      appVisible: true,
+      appVisibilityChangedAt: START.toISOString(),
+    });
+    expect(original.sendHeartbeat).not.toHaveBeenCalled();
+  });
+
+  it("reports real page input to both host connections", () => {
+    const first = createHeartbeatClient("host-one");
+    const second = createHeartbeatClient("host-two");
+    renderHook(() => {
+      useClientActivity({
+        client: first.client,
+        focusedAgentId: "agent-1",
+        focusedTerminalId: null,
+      });
+      useClientActivity({ client: second.client, focusedAgentId: null, focusedTerminalId: null });
+    });
+    first.sendHeartbeat.mockClear();
+    second.sendHeartbeat.mockClear();
+    vi.setSystemTime(new Date(START.getTime() + 500));
+
+    act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "x" })));
+
+    expect(first.sendHeartbeat).toHaveBeenCalledOnce();
+    expect(second.sendHeartbeat).toHaveBeenCalledOnce();
+    expect(first.sendHeartbeat.mock.calls[0]?.[0].lastActivityAt).toBe(
+      new Date(START.getTime() + 500).toISOString(),
+    );
+    expect(second.sendHeartbeat.mock.calls[0]?.[0].lastActivityAt).toBe(
+      new Date(START.getTime() + 500).toISOString(),
+    );
   });
 });
