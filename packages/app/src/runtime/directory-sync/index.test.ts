@@ -9,6 +9,7 @@ import {
 import { normalizeAgentSnapshot } from "@/utils/agent-snapshots";
 import { selectWorkspaceDirectoryServerIds } from "@/stores/session-store-hooks/selectors";
 import type { CachedDirectory } from "@/runtime/replica-cache";
+import { selectWorkspaceLabelDefinitions, useWorkspaceLabels } from "@/workspace-labels";
 import {
   DirectoryRefreshSupersededError,
   DirectorySync,
@@ -25,6 +26,8 @@ class FakeDirectoryClient {
   fetchWorkspacesCalls = 0;
   lastWorkspaceOptions: unknown;
   listProjectsCalls = 0;
+  listWorkspaceLabelsCalls = 0;
+  serverInfo: ReturnType<DaemonClient["getLastServerInfoMessage"]> = null;
   lastProjectOptions: unknown;
   projectResult: ProjectListResult | null = null;
   private pendingAgentFetch: Promise<AgentFetchResult> | null = null;
@@ -116,8 +119,17 @@ class FakeDirectoryClient {
     };
   }
 
-  getLastServerInfoMessage(): null {
-    return null;
+  async listWorkspaceLabels(): Promise<Awaited<ReturnType<DaemonClient["listWorkspaceLabels"]>>> {
+    this.listWorkspaceLabelsCalls += 1;
+    return {
+      requestId: "workspace-labels",
+      labels: [{ name: "codex", color: "emerald" }],
+      sync: { mode: "snapshot", generation: "labels-1", headSeq: 1, removals: [] },
+    };
+  }
+
+  getLastServerInfoMessage(): ReturnType<DaemonClient["getLastServerInfoMessage"]> {
+    return this.serverInfo;
   }
 }
 
@@ -392,7 +404,7 @@ describe("DirectorySync session readiness", () => {
     directory.dispose();
   });
 
-  it("coalesces overlapping route and full-directory demand", async () => {
+  it("promotes an in-flight route refresh to load full-directory metadata", async () => {
     const serverId = "coalesced-directory-demand";
     const { client, directory } = createDirectory(serverId);
     const releaseAgents = client.holdAgentFetch();
@@ -405,6 +417,13 @@ describe("DirectorySync session readiness", () => {
       version: "test",
       features: { workspaceMultiplicity: true },
     });
+    client.serverInfo = {
+      status: "server_info",
+      serverId,
+      hostname: null,
+      version: "test",
+      features: { workspaceLabels: true },
+    };
 
     directory.setAgentRouteDemand(["agent-1"]);
     directory.setDemand({}, true);
@@ -424,8 +443,66 @@ describe("DirectorySync session readiness", () => {
     });
     await directory.refreshDemand();
 
+    expect(
+      selectWorkspaceLabelDefinitions({
+        hostsById: useWorkspaceLabels.getState().hosts,
+        serverId,
+        names: ["codex"],
+      }),
+    ).toEqual([{ name: "codex", color: "emerald" }]);
+    expect(client.listWorkspaceLabelsCalls).toBe(1);
+    expect(client.fetchAgentsCalls).toBe(2);
+    expect(client.fetchWorkspacesCalls).toBe(2);
+    directory.dispose();
+  });
+
+  it("does not treat a completed route refresh as satisfied full-directory demand", async () => {
+    const serverId = "completed-route-full-demand";
+    const { client, directory } = createDirectory(serverId);
+    const store = useSessionStore.getState();
+    store.initializeSession(serverId, client as unknown as DaemonClient, 1);
+    store.updateSessionServerInfo(serverId, {
+      serverId,
+      hostname: null,
+      version: "test",
+      features: { workspaceMultiplicity: true },
+    });
+    client.serverInfo = {
+      status: "server_info",
+      serverId,
+      hostname: null,
+      version: "test",
+      features: { workspaceLabels: true },
+    };
+
+    directory.setAgentRouteDemand(["agent-1"]);
+    await directory.refreshDemand();
     expect(client.fetchAgentsCalls).toBe(1);
-    expect(client.fetchWorkspacesCalls).toBe(1);
+    expect(client.listWorkspaceLabelsCalls).toBe(0);
+
+    const sidebar = {};
+    directory.setDemand(sidebar, true);
+    await directory.refreshDemand();
+
+    expect(
+      selectWorkspaceLabelDefinitions({
+        hostsById: useWorkspaceLabels.getState().hosts,
+        serverId,
+        names: ["codex"],
+      }),
+    ).toEqual([{ name: "codex", color: "emerald" }]);
+    expect(client.listWorkspaceLabelsCalls).toBe(1);
+    expect(client.fetchAgentsCalls).toBe(2);
+    expect(client.fetchWorkspacesCalls).toBe(2);
+
+    directory.setDemand(sidebar, false);
+    directory.setAgentRouteDemand(["agent-2"]);
+    directory.setDemand({}, true);
+    await Promise.resolve();
+
+    expect(client.listWorkspaceLabelsCalls).toBe(1);
+    expect(client.fetchAgentsCalls).toBe(2);
+    expect(client.fetchWorkspacesCalls).toBe(2);
     directory.dispose();
   });
 
