@@ -1,0 +1,48 @@
+:root {
+  color-scheme: light dark;
+  font:
+    13px/1.45 system-ui,
+    sans-serif;
+}
+body {
+  margin: 16px;
+  width: 360px;
+}
+h1 {
+  font-size: 17px;
+  margin: 0 0 16px;
+}
+h2 {
+  font-size: 13px;
+  margin-top: 20px;
+}
+p {
+  margin: 10px 0;
+}
+.actions {
+  display: flex;
+  gap: 8px;
+}
+button {
+  padding: 7px 10px;
+  cursor: pointer;
+}
+button:disabled {
+  cursor: wait;
+}
+ol {
+  padding-left: 18px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+li {
+  margin: 8px 0;
+  overflow-wrap: anywhere;
+}
+.error {
+  color: light-dark(#aa1c1c, #ff9999);
+}
+.note {
+  opacity: 0.75;
+  font-size: 12px;
+}

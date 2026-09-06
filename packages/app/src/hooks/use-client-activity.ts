@@ -1,9 +1,10 @@
 import { useEffect, useRef } from "react";
 import { AppState } from "react-native";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
-import { getIsElectron, isWeb, isNative } from "@/constants/platform";
+import { getIsElectron, isWeb } from "@/constants/platform";
 import { readDesktopSystemIdleTimeMs } from "@/desktop/electron/idle";
 import { invokeDesktopCommand } from "@/desktop/electron/invoke";
+import { getIsAppActivelyVisible } from "@/utils/app-visibility";
 import {
   type ClientActivityTracker,
   createClientActivityTracker,
@@ -40,17 +41,17 @@ export function useClientActivity({
       deviceType: isWeb ? "web" : "mobile",
       initialFocusedAgentId: focusedAgentId,
       initialFocusedTerminalId: focusedTerminalId,
-      initialAppVisible: AppState.currentState === "active",
+      initialAppVisible: getIsAppActivelyVisible(),
       now: () => Date.now(),
       onAppResumed: (awayMs) => onAppResumedRef.current?.(awayMs),
     });
   }
   const tracker = trackerRef.current;
 
-  // Track app visibility via AppState (native).
+  // Track native app state without overwriting web window-focus visibility.
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (nextState) => {
-      tracker.notifyAppVisibility(nextState === "active");
+      tracker.notifyAppVisibility(getIsAppActivelyVisible(nextState));
       tracker.sendHeartbeat();
     });
     return () => subscription.remove();
@@ -58,7 +59,7 @@ export function useClientActivity({
 
   // Track user activity and visibility on web.
   useEffect(() => {
-    if (isNative) return;
+    if (!isWeb) return;
     if (typeof document === "undefined") return;
 
     const handleUserActivity = () => {
@@ -67,15 +68,24 @@ export function useClientActivity({
     };
 
     const handleVisibilityChange = () => {
-      const visible = document.visibilityState === "visible";
-      const { changed } = tracker.notifyAppVisibility(visible);
-      if (changed && visible) {
-        tracker.maybeSendImmediateHeartbeat();
+      const { changed } = tracker.notifyAppVisibility(getIsAppActivelyVisible());
+      if (changed) {
+        // A stale visible target suppresses notifications at the daemon. Focus
+        // transitions must reach it even inside the user-activity throttle.
+        tracker.sendHeartbeat();
+      }
+      return changed;
+    };
+
+    const handleFocus = () => {
+      if (!handleVisibilityChange()) {
+        handleUserActivity();
       }
     };
 
     document.addEventListener("visibilitychange", handleVisibilityChange);
-    window.addEventListener("focus", handleUserActivity);
+    window.addEventListener("focus", handleFocus);
+    window.addEventListener("blur", handleVisibilityChange);
     window.addEventListener("pointerdown", handleUserActivity, { passive: true });
     window.addEventListener("keydown", handleUserActivity);
     window.addEventListener("wheel", handleUserActivity, { passive: true });
@@ -83,7 +93,8 @@ export function useClientActivity({
 
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
-      window.removeEventListener("focus", handleUserActivity);
+      window.removeEventListener("focus", handleFocus);
+      window.removeEventListener("blur", handleVisibilityChange);
       window.removeEventListener("pointerdown", handleUserActivity);
       window.removeEventListener("keydown", handleUserActivity);
       window.removeEventListener("wheel", handleUserActivity);

@@ -24,6 +24,10 @@ describe("resolveProviderIconName", () => {
   it("falls back to the bot icon for unknown custom providers", () => {
     expect(resolveProviderIconName("custom-claude-profile")).toEqual({ kind: "bot" });
   });
+
+  it("uses the Gemini brand icon for Antigravity", () => {
+    expect(resolveProviderIconName("antigravity")).toEqual({ kind: "catalog", id: "gemini" });
+  });
 });
 
 describe("known provider icon names", () => {

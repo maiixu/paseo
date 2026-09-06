@@ -4,13 +4,14 @@ import { useAggregatedAgents } from "./use-aggregated-agents";
 import { getDesktopHost } from "@/desktop/host";
 import { useWorkspaceStatusesForBadges } from "@/stores/session-store-hooks";
 import { deriveMacDockBadgeCountFromWorkspaceStatuses } from "@/utils/desktop-badge-state";
-import { isNative } from "@/constants/platform";
+import { getIsElectron, isNative } from "@/constants/platform";
+import { useCurrentBrowserAgent } from "@/browser-feedback/current-agent";
 
-type FaviconStatus = "none" | "running" | "attention";
+type FaviconState = "none" | "running" | "attention";
 type ColorScheme = "dark" | "light";
 
 /* eslint-disable @typescript-eslint/no-require-imports */
-const FAVICON_IMAGES: Record<ColorScheme, Record<FaviconStatus, { uri: string } | number>> = {
+const FAVICON_IMAGES: Record<ColorScheme, Record<FaviconState, { uri: string } | number>> = {
   dark: {
     none: require("../../assets/images/favicon-dark.png"),
     running: require("../../assets/images/favicon-dark-running.png"),
@@ -26,7 +27,7 @@ const FAVICON_IMAGES: Record<ColorScheme, Record<FaviconStatus, { uri: string } 
 
 function deriveFaviconStatus(
   agents: ReturnType<typeof useAggregatedAgents>["agents"],
-): FaviconStatus {
+): FaviconState {
   const hasRunning = agents.some((agent) => agent.status === "running");
   if (hasRunning) {
     return "running";
@@ -39,7 +40,7 @@ function deriveFaviconStatus(
   return "none";
 }
 
-function getFaviconUri(status: FaviconStatus, colorScheme: ColorScheme): string {
+function getFaviconUri(status: FaviconState, colorScheme: ColorScheme): string {
   const image = FAVICON_IMAGES[colorScheme][status];
   if (typeof image === "object" && "uri" in image) {
     return image.uri;
@@ -61,7 +62,7 @@ function getOrCreateFaviconLink(): HTMLLinkElement | null {
   return link;
 }
 
-function updateFavicon(status: FaviconStatus, colorScheme: ColorScheme) {
+function updateFavicon(status: FaviconState, colorScheme: ColorScheme) {
   const link = getOrCreateFaviconLink();
   if (!link) return;
 
@@ -93,13 +94,9 @@ async function updateMacDockBadge(count?: number) {
   }
 }
 
-export function useFaviconStatus() {
-  const { agents } = useAggregatedAgents({ demand: !isNative });
-  const workspaceStatuses = useWorkspaceStatusesForBadges();
+function useFavicon(status: FaviconState) {
   const [colorScheme, setColorScheme] = useState<ColorScheme>(getSystemColorScheme);
-  const lastDockBadgeCountRef = useRef<number | undefined>(undefined);
 
-  // Listen for system color scheme changes
   useEffect(() => {
     if (isNative || typeof window === "undefined") return;
 
@@ -112,17 +109,36 @@ export function useFaviconStatus() {
     return () => mediaQuery.removeEventListener("change", handler);
   }, []);
 
-  // Update favicon when agents or color scheme changes
   useEffect(() => {
-    if (isNative) return;
-
-    const status = deriveFaviconStatus(agents);
     updateFavicon(status, colorScheme);
+  }, [colorScheme, status]);
+}
 
+function BrowserFaviconStatus() {
+  const { status } = useCurrentBrowserAgent();
+  useFavicon(status);
+  return null;
+}
+
+function DesktopFaviconStatus() {
+  const { agents } = useAggregatedAgents();
+  const workspaceStatuses = useWorkspaceStatusesForBadges();
+  const lastDockBadgeCountRef = useRef<number | undefined>(undefined);
+  useFavicon(deriveFaviconStatus(agents));
+
+  useEffect(() => {
     const dockBadgeCount = deriveMacDockBadgeCountFromWorkspaceStatuses(workspaceStatuses);
     if (dockBadgeCount !== lastDockBadgeCountRef.current) {
       lastDockBadgeCountRef.current = dockBadgeCount;
       void updateMacDockBadge(dockBadgeCount);
     }
-  }, [agents, colorScheme, workspaceStatuses]);
+  }, [workspaceStatuses]);
+  return null;
+}
+
+export function FaviconStatus() {
+  if (isNative) {
+    return null;
+  }
+  return getIsElectron() ? <DesktopFaviconStatus /> : <BrowserFaviconStatus />;
 }

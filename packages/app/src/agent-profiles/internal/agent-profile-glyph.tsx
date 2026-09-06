@@ -33,6 +33,7 @@ import {
 } from "lucide-react-native";
 import { identityForeground } from "@/styles/identity-colors";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
+import { getProviderIcon } from "@/components/provider-icons";
 import {
   AGENT_PROFILE_COLORS,
   resolveAgentProfileColor,
@@ -43,12 +44,13 @@ import {
 
 /** Drawn when a profile names no icon, and as the "default" cell in the picker grid. */
 const ThemedDefaultIcon = withUnistyles(Star);
+const ThemedGeminiIcon = withUnistyles(getProviderIcon("gemini"));
 
 /**
  * `withUnistyles` has to wrap each icon once at module scope, so the registry
  * stores the themed component rather than the raw lucide one.
  */
-const THEMED_ICONS: Record<AgentProfileIconKey, typeof ThemedDefaultIcon> = {
+const THEMED_ICONS: Record<Exclude<AgentProfileIconKey, "gemini">, typeof ThemedDefaultIcon> = {
   code: withUnistyles(Code),
   terminal: withUnistyles(Terminal),
   bug: withUnistyles(Bug),
@@ -123,6 +125,9 @@ export function AgentProfileGlyph({
 }) {
   const iconKey = resolveAgentProfileIconKey(icon);
   const mapping = COLOR_MAPPINGS[resolveAgentProfileColor(color)];
+  if (iconKey === "gemini") {
+    return <ThemedGeminiIcon size={size} uniProps={mapping} />;
+  }
   const Icon = iconKey ? THEMED_ICONS[iconKey] : ThemedDefaultIcon;
   return <Icon size={size} uniProps={mapping} />;
 }

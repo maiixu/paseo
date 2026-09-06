@@ -12,6 +12,9 @@ const BUILTIN_PROVIDER_IDS = new Set(BUILTIN_PROVIDER_ICON_NAMES);
 const KNOWN_PROVIDER_IDS = new Set(KNOWN_PROVIDER_ICON_NAMES);
 
 export function resolveProviderIconName(provider: string): ProviderIconName {
+  if (provider === "antigravity") {
+    return { kind: "catalog", id: "gemini" };
+  }
   if (BUILTIN_PROVIDER_IDS.has(provider)) {
     return { kind: "builtin", id: provider };
   }

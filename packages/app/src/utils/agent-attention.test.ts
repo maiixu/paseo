@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { Agent } from "@/stores/session-store";
-import { pickAttentionAgent, shouldClearAgentAttention } from "@/utils/agent-attention";
+import {
+  pickAttentionAgent,
+  shouldClearAgentAttention,
+  shouldClearViewedAgentCompletion,
+} from "@/utils/agent-attention";
 
 function createAgent(input: Partial<Agent> & Pick<Agent, "id">): Agent {
   const { id, ...rest } = input;
@@ -140,6 +144,64 @@ describe("shouldClearAgentAttention", () => {
         hasDeferredFocusEntryClear: true,
       }),
     ).toBe(true);
+  });
+
+  it("acknowledges a viewed completion even if ordinary focus clearing was deferred", () => {
+    expect(
+      shouldClearAgentAttention({
+        agentId: "agent-1",
+        isConnected: true,
+        requiresAttention: true,
+        attentionReason: "finished",
+        trigger: "completion-viewed",
+        hasDeferredFocusEntryClear: true,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("shouldClearViewedAgentCompletion", () => {
+  it("acknowledges completion while the user is already viewing the idle agent", () => {
+    expect(
+      shouldClearViewedAgentCompletion({
+        status: "idle",
+        attentionReason: "finished",
+        isActivelyViewed: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("leaves background completion unread", () => {
+    expect(
+      shouldClearViewedAgentCompletion({
+        status: "idle",
+        attentionReason: "finished",
+        isActivelyViewed: false,
+      }),
+    ).toBe(false);
+  });
+
+  it.each(["permission", "error"] as const)(
+    "does not acknowledge %s attention",
+    (attentionReason) => {
+      expect(
+        shouldClearViewedAgentCompletion({
+          status: "idle",
+          attentionReason,
+          isActivelyViewed: true,
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it("does not clear an older completion once another turn is running", () => {
+    expect(
+      shouldClearViewedAgentCompletion({
+        status: "running",
+        attentionReason: "finished",
+        isActivelyViewed: true,
+      }),
+    ).toBe(false);
   });
 });
 
