@@ -67,6 +67,24 @@ describe("resolveProviderIconName", () => {
       svg: secondSvg,
     });
   });
+
+  it("uses the Gemini brand icon for Antigravity", () => {
+    expect(resolveProviderIconName("antigravity")).toEqual({ kind: "catalog", id: "gemini" });
+  });
+
+  it("lets a host-provided Antigravity icon override the default Gemini glyph", () => {
+    const svg = "<svg id='antigravity-provider' />";
+    replaceProviderSnapshotIcons("antigravity-host", [{ provider: "antigravity", iconSvg: svg }]);
+
+    expect(resolveProviderIconName("antigravity", "antigravity-host")).toEqual({
+      kind: "svg",
+      svg,
+    });
+    expect(resolveProviderIconName("antigravity", "other-host")).toEqual({
+      kind: "catalog",
+      id: "gemini",
+    });
+  });
 });
 
 describe("known provider icon names", () => {
