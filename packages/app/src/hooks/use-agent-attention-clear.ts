@@ -3,10 +3,12 @@ import { AppState } from "react-native";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import {
   shouldClearAgentAttention,
+  shouldClearViewedAgentCompletion,
   type AgentAttentionClearTrigger,
 } from "@/utils/agent-attention";
 import { getIsAppActivelyVisible } from "@/utils/app-visibility";
-import { isWeb } from "@/constants/platform";
+import { getIsElectron, isWeb } from "@/constants/platform";
+import type { Agent } from "@/stores/session-store";
 
 type AttentionReason = "finished" | "error" | "permission" | null | undefined;
 
@@ -16,6 +18,7 @@ interface UseAgentAttentionClearParams {
   isConnected: boolean;
   requiresAttention: boolean | null | undefined;
   attentionReason: AttentionReason;
+  agentStatus: Agent["status"] | null;
   isScreenFocused: boolean;
 }
 
@@ -31,6 +34,7 @@ export function useAgentAttentionClear({
   isConnected,
   requiresAttention,
   attentionReason,
+  agentStatus,
   isScreenFocused,
 }: UseAgentAttentionClearParams): AgentAttentionClearController {
   const [isAppVisible, setIsAppVisible] = useState<boolean>(() => getIsAppActivelyVisible());
@@ -112,14 +116,25 @@ export function useAgentAttentionClear({
   useEffect(() => {
     const enteredScreenFocus = !prevScreenFocusedRef.current && isScreenFocused && isAppVisible;
     const resumedIntoFocusedAgent = !prevAppVisibleRef.current && isAppVisible && isScreenFocused;
+    const isBrowser = isWeb && !getIsElectron();
+    const isActivelyViewed = isScreenFocused && isAppVisible;
+    const viewedCompletion =
+      isBrowser &&
+      shouldClearViewedAgentCompletion({
+        status: agentStatus,
+        attentionReason,
+        isActivelyViewed,
+      });
 
-    if (enteredScreenFocus || resumedIntoFocusedAgent) {
+    if (viewedCompletion) {
+      clearAttention("completion-viewed");
+    } else if (enteredScreenFocus || resumedIntoFocusedAgent) {
       clearAttention("focus-entry");
     }
 
     prevScreenFocusedRef.current = isScreenFocused;
     prevAppVisibleRef.current = isAppVisible;
-  }, [clearAttention, isAppVisible, isScreenFocused]);
+  }, [agentStatus, attentionReason, clearAttention, isAppVisible, isScreenFocused]);
 
   return {
     clearOnInputFocus: useCallback(() => {

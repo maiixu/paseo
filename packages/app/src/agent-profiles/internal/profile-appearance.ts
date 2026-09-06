@@ -44,6 +44,7 @@ export const AGENT_PROFILE_ICON_KEYS = [
   "brain",
   "sparkles",
   "shield",
+  "gemini",
 ] as const;
 
 export type AgentProfileIconKey = (typeof AGENT_PROFILE_ICON_KEYS)[number];

@@ -126,7 +126,7 @@ export class DirectorySync {
   private readonly routeDemandIds = new Set<string>();
   private readonly fullDemandSources = new Set<object>();
   private demandRefresh: Promise<void> | null = null;
-  private satisfiedDemandSource: DirectorySourceToken | null = null;
+  private satisfiedDemandSource: (DirectorySourceToken & { scope: "route" | "full" }) | null = null;
   private cursors: DirectoryCheckpoint = {};
 
   constructor(
@@ -277,15 +277,17 @@ export class DirectorySync {
       return this.fullDemandSources.size > 0 ? this.loadCachedDirectory() : Promise.resolve();
     }
     const source = this.connection.source;
+    const scope = this.fullDemandSources.size > 0 ? "full" : "route";
     if (
       !force &&
       this.satisfiedDemandSource?.clientGeneration === source.clientGeneration &&
-      this.satisfiedDemandSource.connectionEpoch === source.connectionEpoch
+      this.satisfiedDemandSource.connectionEpoch === source.connectionEpoch &&
+      (scope === "route" || this.satisfiedDemandSource.scope === "full")
     ) {
       return Promise.resolve();
     }
     const refresh =
-      this.fullDemandSources.size > 0
+      scope === "full"
         ? this.refreshAll()
         : Promise.all([
             this.refreshAgentsInternal({ subscribe: {} }, false),
@@ -293,7 +295,7 @@ export class DirectorySync {
           ]).then(() => undefined);
     this.demandRefresh = refresh
       .then(() => {
-        this.satisfiedDemandSource = source;
+        this.satisfiedDemandSource = { ...source, scope };
         return undefined;
       })
       .finally(() => {
@@ -305,6 +307,10 @@ export class DirectorySync {
             current.connectionEpoch !== source.connectionEpoch)
         ) {
           void this.requestDemandRefresh().catch(() => undefined);
+        } else if (scope === "route" && this.fullDemandSources.size > 0) {
+          // A sidebar can mount while route hydration is in flight. Complete its
+          // stronger demand, including catalogs, before callers consider it ready.
+          return this.requestDemandRefresh();
         }
       });
     return this.demandRefresh;
