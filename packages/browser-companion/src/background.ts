@@ -162,6 +162,9 @@ chrome.tabs.onUpdated.addListener((tabId, change, tab) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   observe(companion.tabRemoved(tabId));
 });
+chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => {
+  observe(companion.tabReplaced(addedTabId, removedTabId));
+});
 chrome.tabs.onActivated.addListener(({ tabId }) => {
   observe(companion.tabActivated(tabId));
 });
