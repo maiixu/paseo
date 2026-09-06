@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Paseo Browser Companion",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "minimum_chrome_version": "120",
   "description": "Route Paseo notifications to their agent's existing tab.",
   "permissions": ["notifications", "storage", "tabs"],

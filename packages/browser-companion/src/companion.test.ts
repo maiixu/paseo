@@ -211,6 +211,9 @@ function setup() {
     restoreAfterNextLookup(id: number) {
       restoreAfterLookup = id;
     },
+    advanceTime(ms: number) {
+      time += ms;
+    },
   };
 }
 
@@ -332,6 +335,144 @@ describe("Paseo browser companion", () => {
     });
     expect(env.created).toEqual([]);
     expect(env.requireTab(2).url).toBe(browserNotificationTarget(ORIGIN, AGENT_B));
+  });
+
+  it("restores a discarded replacement after its old tab disappears before disconnect", async () => {
+    const env = setup();
+    env.requireTab(1).url = `${ORIGIN}/h/local/workspace/workspace-a`;
+    await env.register(1, AGENT_A);
+    const oldSender = env.sender(1);
+    env.tabs.set(3, { ...env.requireTab(1), id: 3, discarded: true });
+    env.tabs.delete(1);
+    await env.companion.disconnect(oldSender);
+    expect((await env.companion.diagnostics()).bindings).toEqual([]);
+    await env.notify();
+    const resumed = createCompanion(env.options);
+    await resumed.tabReplaced(3, 1);
+    await resumed.disconnect(oldSender);
+    await resumed.click(env.notifications[0].id);
+    expect(env.updates).toContainEqual({
+      tabId: 3,
+      update: { active: true, url: browserNotificationTarget(ORIGIN, AGENT_A) },
+    });
+    expect(env.requireTab(3).autoDiscardable).toBe(true);
+    expect(env.created).toEqual([]);
+    expect(env.requireTab(2).url).toBe(browserNotificationTarget(ORIGIN, AGENT_B));
+  });
+
+  it("retains a replacement announced before disconnect and before its discarded flag", async () => {
+    const env = setup();
+    await env.register(1, AGENT_A);
+    const oldSender = env.sender(1);
+    env.tabs.set(3, { ...env.requireTab(1), id: 3 });
+    env.tabs.delete(1);
+    await env.companion.tabReplaced(3, 1);
+    await env.companion.disconnect(oldSender);
+    env.requireTab(3).discarded = true;
+    await env.companion.tabUpdated(3, { discarded: true }, env.requireTab(3));
+    await env.notify();
+    await env.companion.click(env.notifications[0].id);
+    expect(env.updates).toContainEqual({
+      tabId: 3,
+      update: { active: true, url: browserNotificationTarget(ORIGIN, AGENT_A) },
+    });
+    expect(env.created).toEqual([]);
+    expect((await env.companion.diagnostics()).traces.map((entry) => entry.detail)).toContain(
+      "Lifecycle: tab 1 replaced by 3; samePage=true, alreadyBound=false",
+    );
+  });
+
+  it("does not reuse a loaded replacement until its own document registers", async () => {
+    const env = setup();
+    await env.register(1, AGENT_A);
+    env.tabs.set(3, { ...env.requireTab(1), id: 3, active: true });
+    env.tabs.delete(1);
+    await env.companion.tabReplaced(3, 1);
+    expect(await env.notify()).toEqual(delivery("accepted"));
+    await env.companion.click(env.notifications[0].id);
+    expect(env.updates.filter(({ tabId, update }) => tabId === 3 && update.active)).toEqual([]);
+    expect(env.created).toEqual([browserNotificationTarget(ORIGIN, AGENT_A)]);
+  });
+
+  it("does not overwrite a replacement document that already selected another agent", async () => {
+    const env = setup();
+    await env.register(1, AGENT_A);
+    const oldSender = env.sender(1);
+    env.tabs.set(3, { ...env.requireTab(1), id: 3 });
+    env.tabs.delete(1);
+    await env.companion.disconnect(oldSender);
+    await env.register(3, AGENT_B);
+    await env.companion.tabReplaced(3, 1);
+    await env.companion.disconnect(oldSender);
+    const bindings = (await env.companion.diagnostics()).bindings;
+    expect(
+      bindings.map(({ tabId, documentId, state, live }) => ({
+        tabId,
+        documentId,
+        identity: state.identity,
+        live,
+      })),
+    ).toEqual([{ tabId: 3, documentId: "document-3", identity: AGENT_B, live: true }]);
+    await env.notify();
+    await env.companion.click(env.notifications[0].id);
+    expect(env.created).toEqual([browserNotificationTarget(ORIGIN, AGENT_A)]);
+  });
+
+  it.each(["none", "running"] as const)(
+    "restores the original discard policy when a replacement registers as %s first",
+    async (status) => {
+      const env = setup();
+      await env.register(1, AGENT_A);
+      env.tabs.set(3, { ...env.requireTab(1), id: 3 });
+      env.tabs.delete(1);
+      await env.register(3, AGENT_B, status);
+      await env.companion.tabReplaced(3, 1);
+      await env.register(3, AGENT_B, "none");
+      expect(env.requireTab(3).autoDiscardable).toBe(true);
+      expect(
+        (await env.companion.diagnostics()).bindings.map((binding) => binding.state.identity),
+      ).toEqual([AGENT_B]);
+    },
+  );
+
+  it.each([
+    {
+      reason: "navigation",
+      change(env: ReturnType<typeof setup>) {
+        env.requireTab(3).url = "https://example.org/";
+      },
+    },
+    {
+      reason: "pending-navigation",
+      change(env: ReturnType<typeof setup>) {
+        env.requireTab(3).pendingUrl = "https://example.org/";
+      },
+    },
+    {
+      reason: "closed",
+      change(env: ReturnType<typeof setup>) {
+        return env.companion.tabRemoved(1);
+      },
+    },
+    {
+      reason: "expired",
+      change(env: ReturnType<typeof setup>) {
+        env.advanceTime(30_001);
+      },
+    },
+  ])("does not revive a missing target after $reason", async ({ change }) => {
+    const env = setup();
+    await env.register(1, AGENT_A);
+    const oldSender = env.sender(1);
+    env.tabs.set(3, { ...env.requireTab(1), id: 3, discarded: true });
+    env.tabs.delete(1);
+    await env.companion.disconnect(oldSender);
+    await change(env);
+    await env.companion.tabReplaced(3, 1);
+    await env.notify();
+    await env.companion.click(env.notifications[0].id);
+    expect(env.updates.filter(({ tabId, update }) => tabId === 3 && update.active)).toEqual([]);
+    expect(env.created).toEqual([browserNotificationTarget(ORIGIN, AGENT_A)]);
   });
 
   it("does not suppress or reuse a disconnected loaded page with an unverified active pane", async () => {

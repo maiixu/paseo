@@ -21,6 +21,7 @@ const BindingSchema = z.object({
   documentId: z.string(),
   state: BrowserFeedbackStateSchema,
   live: z.boolean(),
+  missingSince: z.number().nullable().default(null),
   lastActiveAt: z.number(),
   previousAutoDiscardable: z.boolean().nullable(),
 });
@@ -51,6 +52,8 @@ type Binding = z.infer<typeof BindingSchema>;
 type Delivery = z.infer<typeof DeliverySchema>;
 type Session = z.infer<typeof SessionSchema>;
 type Trace = z.infer<typeof TraceSchema>;
+const MISSING_TAB_TTL_MS = 30_000;
+const MAX_MISSING_TABS = 100;
 
 export interface PageSender {
   tabId: number;
@@ -118,6 +121,18 @@ export function createCompanion({ browser, now }: CompanionOptions) {
   let tail: Promise<unknown> = Promise.resolve();
   let session: Session | null = null;
 
+  function pruneMissingTabs(current: Session): void {
+    const cutoff = now() - MISSING_TAB_TTL_MS;
+    const pending = new Set(
+      current.bindings
+        .filter((binding) => binding.missingSince !== null && binding.missingSince > cutoff)
+        .slice(-MAX_MISSING_TABS),
+    );
+    current.bindings = current.bindings.filter(
+      (binding) => binding.missingSince === null || pending.has(binding),
+    );
+  }
+
   async function transact<T>(operation: (current: Session) => Promise<T>): Promise<T> {
     const result = tail.then(async () => {
       if (session === null) {
@@ -127,9 +142,11 @@ export function createCompanion({ browser, now }: CompanionOptions) {
             ? { version: 1, bindings: [], deliveries: [], traces: [] }
             : SessionSchema.parse(stored);
       }
+      pruneMissingTabs(session);
       try {
         return await operation(session);
       } finally {
+        pruneMissingTabs(session);
         await browser.writeSession(session);
       }
     });
@@ -149,9 +166,29 @@ export function createCompanion({ browser, now }: CompanionOptions) {
     }
   }
 
-  async function removeBinding(current: Session, binding: Binding): Promise<void> {
+  async function removeBinding(current: Session, binding: Binding, reason: string): Promise<void> {
+    trace(current, {
+      tabId: binding.tabId,
+      identity: binding.state.identity,
+      stage: "received",
+      detail: `Lifecycle: tab ${binding.tabId} binding invalidated: ${reason}`,
+    });
     await releasePageRetention(binding);
     current.bindings = current.bindings.filter((candidate) => candidate.tabId !== binding.tabId);
+  }
+
+  function markMissingTab(current: Session, binding: Binding): void {
+    binding.live = false;
+    if (binding.missingSince === null) {
+      // A missing old ID can precede onReplaced. This record cannot select a tab.
+      binding.missingSince = now();
+      trace(current, {
+        tabId: binding.tabId,
+        identity: binding.state.identity,
+        stage: "received",
+        detail: `Lifecycle: tab ${binding.tabId} missing; awaiting replacement or removal`,
+      });
+    }
   }
 
   async function targetTabs(
@@ -165,8 +202,12 @@ export function createCompanion({ browser, now }: CompanionOptions) {
         continue;
       }
       const tab = await browser.getTab(binding.tabId);
-      if (tab === null || !matchesPage(binding, tab)) {
-        await removeBinding(current, binding);
+      if (tab === null) {
+        markMissingTab(current, binding);
+        continue;
+      }
+      if (!matchesPage(binding, tab)) {
+        await removeBinding(current, binding, "target URL changed");
         continue;
       }
       // A loaded page without its bridge may have changed panes without changing its URL.
@@ -285,7 +326,7 @@ export function createCompanion({ browser, now }: CompanionOptions) {
         if (binding.previousAutoDiscardable !== null) {
           originalAutoDiscardable = binding.previousAutoDiscardable;
         }
-        await removeBinding(current, binding);
+        await removeBinding(current, binding, "document replaced");
         binding = undefined;
       }
       if (binding === undefined) {
@@ -295,6 +336,7 @@ export function createCompanion({ browser, now }: CompanionOptions) {
           pageUrl: sender.pageUrl,
           state: message.state,
           live: true,
+          missingSince: null,
           lastActiveAt: 0,
           previousAutoDiscardable: null,
         };
@@ -303,6 +345,7 @@ export function createCompanion({ browser, now }: CompanionOptions) {
       binding.pageUrl = sender.pageUrl;
       binding.state = message.state;
       binding.live = true;
+      binding.missingSince = null;
       if (tab.active) {
         binding.lastActiveAt = now();
       }
@@ -328,13 +371,23 @@ export function createCompanion({ browser, now }: CompanionOptions) {
         return;
       }
       const tab = await browser.getTab(sender.tabId);
-      if (tab !== null && matchesPage(binding, tab)) {
+      trace(current, {
+        tabId: sender.tabId,
+        identity: binding.state.identity,
+        stage: "received",
+        detail: `Lifecycle: tab ${sender.tabId} disconnected; exists=${tab !== null}, discarded=${tab?.discarded ?? false}, samePage=${tab !== null && matchesPage(binding, tab)}`,
+      });
+      if (tab === null) {
+        markMissingTab(current, binding);
+        return;
+      }
+      if (matchesPage(binding, tab)) {
         // Port disconnection can precede Chrome's discarded-state update.
         binding.live = false;
         await releasePageRetention(binding);
         return;
       }
-      await removeBinding(current, binding);
+      await removeBinding(current, binding, "disconnected URL changed");
     });
   }
 
@@ -350,18 +403,78 @@ export function createCompanion({ browser, now }: CompanionOptions) {
       }
       if (tab.discarded && matchesPage(binding, tab)) {
         binding.live = false;
+        trace(current, {
+          tabId,
+          identity: binding.state.identity,
+          stage: "received",
+          detail: `Lifecycle: tab ${tabId} discarded; binding retained`,
+        });
         return;
       }
       const startsLoading = change.status === "loading";
       if (!matchesPage(binding, tab) || startsLoading) {
-        await removeBinding(current, binding);
+        await removeBinding(
+          current,
+          binding,
+          `loading=${startsLoading}, samePage=${matchesPage(binding, tab)}`,
+        );
       }
     });
   }
 
   async function tabRemoved(tabId: number): Promise<void> {
     await transact(async (current) => {
-      current.bindings = current.bindings.filter((binding) => binding.tabId !== tabId);
+      const binding = current.bindings.find((candidate) => candidate.tabId === tabId);
+      if (binding) {
+        trace(current, {
+          tabId,
+          identity: binding.state.identity,
+          stage: "received",
+          detail: `Lifecycle: tab ${tabId} removed; binding invalidated`,
+        });
+      }
+      current.bindings = current.bindings.filter((candidate) => candidate.tabId !== tabId);
+    });
+  }
+
+  async function tabReplaced(addedTabId: number, removedTabId: number): Promise<void> {
+    await transact(async (current) => {
+      const binding = current.bindings.find((candidate) => candidate.tabId === removedTabId);
+      if (!binding) {
+        return;
+      }
+      current.bindings = current.bindings.filter((candidate) => candidate !== binding);
+      const tab = await browser.getTab(addedTabId);
+      const replacementBinding = current.bindings.find(
+        (candidate) => candidate.tabId === addedTabId,
+      );
+      const alreadyBound = replacementBinding !== undefined;
+      const samePage = tab !== null && matchesPage(binding, tab);
+      if (tab !== null && binding.previousAutoDiscardable !== null) {
+        if (
+          replacementBinding !== undefined &&
+          replacementBinding.previousAutoDiscardable !== null
+        ) {
+          replacementBinding.previousAutoDiscardable = binding.previousAutoDiscardable;
+        } else {
+          await browser.updateTab(addedTabId, { autoDiscardable: binding.previousAutoDiscardable });
+        }
+      }
+      trace(current, {
+        tabId: addedTabId,
+        identity: binding.state.identity,
+        stage: "received",
+        detail: `Lifecycle: tab ${removedTabId} replaced by ${addedTabId}; samePage=${samePage}, alreadyBound=${alreadyBound}`,
+      });
+      if (!samePage || alreadyBound) {
+        return;
+      }
+      // The replacement has no verified document yet. Only a discarded tab can reuse this identity.
+      binding.tabId = addedTabId;
+      binding.live = false;
+      binding.missingSince = null;
+      binding.previousAutoDiscardable = null;
+      current.bindings.push(binding);
     });
   }
 
@@ -385,8 +498,12 @@ export function createCompanion({ browser, now }: CompanionOptions) {
       for (const { binding } of candidates) {
         // Recheck immediately before activation: another user action may have closed or navigated it.
         const tab = await browser.getTab(binding.tabId);
-        if (tab === null || !matchesPage(binding, tab)) {
-          await removeBinding(current, binding);
+        if (tab === null) {
+          markMissingTab(current, binding);
+          continue;
+        }
+        if (!matchesPage(binding, tab)) {
+          await removeBinding(current, binding, "URL changed before activation");
           continue;
         }
         if (!binding.live && !tab.discarded) {
@@ -398,15 +515,27 @@ export function createCompanion({ browser, now }: CompanionOptions) {
         }
         const activated = await browser.updateTab(binding.tabId, update);
         if (activated === null) {
-          await removeBinding(current, binding);
+          markMissingTab(current, binding);
           continue;
         }
         await browser.focusWindow(activated.windowId);
+        trace(current, {
+          tabId: binding.tabId,
+          identity: delivery.identity,
+          stage: "received",
+          detail: `Lifecycle: notification reused tab ${binding.tabId}; discarded=${tab.discarded}`,
+        });
         await browser.clearNotification(chromeId);
         return;
       }
       const opened = await browser.createTab(targetUrl);
       await browser.focusWindow(opened.windowId);
+      trace(current, {
+        tabId: opened.id ?? null,
+        identity: delivery.identity,
+        stage: "received",
+        detail: `Lifecycle: notification opened tab ${opened.id ?? "unknown"}`,
+      });
       await browser.clearNotification(chromeId);
     });
   }
@@ -415,13 +544,15 @@ export function createCompanion({ browser, now }: CompanionOptions) {
     return transact(async (current) => {
       for (const binding of current.bindings) {
         const tab = await browser.getTab(binding.tabId);
-        if (tab === null || !matchesPage(binding, tab)) {
-          await removeBinding(current, binding);
+        if (tab === null) {
+          markMissingTab(current, binding);
+        } else if (!matchesPage(binding, tab)) {
+          await removeBinding(current, binding, "URL changed during diagnostics");
         }
       }
       return {
         permission: await browser.notificationPermission(),
-        bindings: current.bindings,
+        bindings: current.bindings.filter((binding) => binding.missingSince === null),
         traces: current.traces,
       };
     });
@@ -472,6 +603,7 @@ export function createCompanion({ browser, now }: CompanionOptions) {
     disconnect,
     tabUpdated,
     tabRemoved,
+    tabReplaced,
     tabActivated,
     click,
     diagnostics,
