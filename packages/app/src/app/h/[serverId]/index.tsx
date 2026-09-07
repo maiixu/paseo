@@ -1,4 +1,7 @@
 import { Redirect } from "expo-router";
+import { useState } from "react";
+import { DEFAULT_LAUNCH_SERVER_ID } from "@/create-agent-preferences/launch-defaults";
+import { generateDraftId } from "@/stores/draft-keys";
 import { useHostRouteServerId } from "@/navigation/host-route-context";
 import {
   resolveHostIndexRoute,
@@ -13,6 +16,7 @@ import {
 
 export default function HostIndexRoute() {
   const serverId = useHostRouteServerId();
+  const [defaultDraftId] = useState(generateDraftId);
   const workspaceSelection = useLastWorkspaceSelection();
   const isWorkspaceSelectionLoaded = useIsLastWorkspaceSelectionHydrated();
   const workspaceSelectionWorkspaceId =
@@ -28,6 +32,7 @@ export default function HostIndexRoute() {
     <Redirect
       href={resolveHostIndexRoute({
         serverId,
+        newWorkspaceDraftId: serverId === DEFAULT_LAUNCH_SERVER_ID ? defaultDraftId : undefined,
         workspaceSelection,
         workspaceSelectionStatus: resolveWorkspaceSelectionStatus({
           hasHydratedWorkspaces,

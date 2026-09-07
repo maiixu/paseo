@@ -183,6 +183,64 @@ describe("resolveStartupRoute", () => {
     hosts: [],
   };
 
+  it("enters the configured host instead of restoring a different host from the homepage", () => {
+    expect(
+      resolveStartupRoute({
+        ...baseIndexInput,
+        defaultServerId: "cloud",
+        hosts: [{ serverId: "mac" }, { serverId: "cloud" }],
+        anyOnlineHostServerId: "mac",
+        workspaceSelection: { serverId: "mac", workspaceId: "old-workspace" },
+        workspaceSelectionStatus: "exists",
+      }),
+    ).toEqual({ kind: "redirect", href: "/h/cloud" });
+  });
+
+  it("keeps a configured saved host even before it connects", () => {
+    expect(
+      resolveStartupRoute({
+        ...baseIndexInput,
+        defaultServerId: "cloud",
+        hosts: [{ serverId: "mac" }, { serverId: "cloud" }],
+        anyOnlineHostServerId: "mac",
+      }),
+    ).toEqual({ kind: "redirect", href: "/h/cloud" });
+  });
+
+  it("waits for host hydration before applying the homepage default", () => {
+    expect(
+      resolveStartupRoute({
+        ...baseIndexInput,
+        defaultServerId: "cloud",
+        hostRegistryStatus: "loading",
+        hosts: [{ serverId: "mac" }],
+        anyOnlineHostServerId: "mac",
+      }),
+    ).toEqual({ kind: "splash" });
+  });
+
+  it("retains startup fallback when the configured host has not been added", () => {
+    expect(
+      resolveStartupRoute({
+        ...baseIndexInput,
+        defaultServerId: "cloud",
+        hosts: [{ serverId: "mac" }],
+        anyOnlineHostServerId: "mac",
+      }),
+    ).toEqual({ kind: "redirect", href: "/h/mac" });
+  });
+
+  it("leaves explicit workspace URLs alone with a configured homepage host", () => {
+    expect(
+      resolveStartupRoute({
+        ...baseIndexInput,
+        defaultServerId: "cloud",
+        route: { kind: "index", pathname: "/h/mac/workspace/task" },
+        hosts: [{ serverId: "mac" }, { serverId: "cloud" }],
+      }),
+    ).toEqual({ kind: "render" });
+  });
+
   it("renders non-index routes instead of making an index startup decision", () => {
     expect(
       resolveStartupRoute({
@@ -343,6 +401,28 @@ describe("resolveStartupRoute", () => {
 });
 
 describe("resolveHostIndexRoute", () => {
+  it("opens a fresh draft on the default host when the remembered workspace is elsewhere", () => {
+    expect(
+      resolveHostIndexRoute({
+        serverId: "cloud",
+        newWorkspaceDraftId: "draft-home",
+        workspaceSelection: { serverId: "mac", workspaceId: "old-workspace" },
+        workspaceSelectionStatus: "exists",
+      }),
+    ).toEqual("/new?serverId=cloud&draftId=draft-home");
+  });
+
+  it("restores a workspace on the default host before creating a fresh draft", () => {
+    expect(
+      resolveHostIndexRoute({
+        serverId: "cloud",
+        newWorkspaceDraftId: "draft-home",
+        workspaceSelection: { serverId: "cloud", workspaceId: "cloud-workspace" },
+        workspaceSelectionStatus: "exists",
+      }),
+    ).toEqual("/h/cloud/workspace/cloud-workspace");
+  });
+
   it("restores the remembered workspace when the host index opens for the same host", () => {
     expect(
       resolveHostIndexRoute({

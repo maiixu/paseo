@@ -35,7 +35,7 @@ export EXPO_PUBLIC_PASEO_DEFAULT_PROFILE_ID=codex-astra-medium
 
 Keep these variables in later builds. The host ID identifies the saved connection; it is not a credential. Profile values come from that host's existing daemon configuration. Both hosts must carry the named profile. Profile ordering is separate from default selection and lives in each host's `daemon.agentProfiles`.
 
-Global **New workspace** uses the configured host. Explicit host/project creation and restored draft selections retain their context. A one-off model choice does not replace the next new agent's default. Existing agents retain their configuration. Builds without these variables keep the upstream selection behavior.
+The homepage and global **New workspace** use the configured host. The homepage restores a remembered workspace only on that host; otherwise it opens a fresh draft there. Explicit host/project URLs and restored draft selections retain their context. A one-off model choice does not replace the next new agent's default. Existing agents retain their configuration. Builds without these variables keep the upstream selection behavior.
 
 ### Stage the files
 

@@ -30,8 +30,8 @@ describe("resolveProviderIconName", () => {
     expect(resolveProviderIconName("gemini")).toEqual({ kind: "builtin", id: "gemini" });
   });
 
-  it("uses Bedrock's service icon without treating other custom Claude providers as Bedrock", () => {
-    expect(resolveProviderIconName("claude-bedrock")).toEqual({ kind: "builtin", id: "bedrock" });
+  it("uses the AWS brand for Bedrock without changing other custom Claude providers", () => {
+    expect(resolveProviderIconName("claude-bedrock")).toEqual({ kind: "builtin", id: "aws" });
     expect(resolveProviderIconName("custom-claude-profile")).toEqual({ kind: "bot" });
   });
 });

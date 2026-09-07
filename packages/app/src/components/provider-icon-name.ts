@@ -16,7 +16,7 @@ export function resolveProviderIconName(provider: string): ProviderIconName {
     return { kind: "builtin", id: "gemini" };
   }
   if (provider === "claude-bedrock") {
-    return { kind: "builtin", id: "bedrock" };
+    return { kind: "builtin", id: "aws" };
   }
   if (BUILTIN_PROVIDER_IDS.has(provider)) {
     return { kind: "builtin", id: provider };

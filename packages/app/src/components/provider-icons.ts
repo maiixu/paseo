@@ -2,7 +2,7 @@ import { Bot, PackagePlus } from "lucide-react-native";
 import { createElement, type ComponentType } from "react";
 import { SvgXml } from "react-native-svg";
 import { withUnistyles } from "react-native-unistyles";
-import { BedrockIcon } from "@/components/icons/bedrock-icon";
+import { AwsIcon } from "@/components/icons/aws-icon";
 import { ClaudeIcon } from "@/components/icons/claude-icon";
 import { CodexIcon } from "@/components/icons/codex-icon";
 import { CopilotIcon } from "@/components/icons/copilot-icon";
@@ -22,7 +22,7 @@ export interface ProviderIconProps {
 export type ProviderIconComponent = ComponentType<ProviderIconProps>;
 
 const BUILTIN_PROVIDER_ICONS: Record<string, ProviderIconComponent> = {
-  bedrock: BedrockIcon,
+  aws: AwsIcon,
   claude: ClaudeIcon as unknown as ProviderIconComponent,
   codex: CodexIcon as unknown as ProviderIconComponent,
   copilot: CopilotIcon as unknown as ProviderIconComponent,

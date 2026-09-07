@@ -1,12 +1,14 @@
 {
   "manifest_version": 3,
   "name": "Paseo Browser Companion",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "minimum_chrome_version": "120",
   "description": "Route Paseo notifications to their agent's existing tab.",
   "permissions": ["notifications", "storage", "tabs"],
   "host_permissions": ["http://127.0.0.1/*"],
-  "background": { "service_worker": "background.js" },
+  "background": {
+    "service_worker": "background.js"
+  },
   "content_scripts": [
     {
       "matches": ["http://127.0.0.1/*"],
@@ -15,6 +17,18 @@
       "all_frames": false
     }
   ],
-  "action": { "default_popup": "popup.html", "default_title": "Paseo Browser Companion" },
-  "icons": { "128": "notification-icon.png" }
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Paseo Browser Companion",
+    "default_icon": {
+      "16": "icon-16.png",
+      "32": "icon-32.png"
+    }
+  },
+  "icons": {
+    "16": "icon-16.png",
+    "32": "icon-32.png",
+    "48": "icon-48.png",
+    "128": "icon-128.png"
+  }
 }
