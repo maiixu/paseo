@@ -431,3 +431,32 @@ describe("shared messages stream parsing", () => {
     expect(highlightedParsed.success).toBe(false);
   });
 });
+
+it("preserves async questions through the outbound websocket schema", () => {
+  const message = {
+    type: "agent_stream",
+    payload: {
+      agentId: "agent-async",
+      timestamp: "2026-09-07T00:00:00Z",
+      event: {
+        type: "timeline",
+        provider: "codex",
+        item: {
+          type: "assistant_message",
+          messageId: "q",
+          text: "Pick",
+          delivery: "async",
+          questions: [
+            { title: "Pick", options: ["A", "B"] },
+            { title: "Why?", options: null },
+          ],
+        },
+      },
+    },
+  };
+  expect(AgentStreamMessageSchema.parse(message)).toEqual(message);
+  expect(WSOutboundMessageSchema.parse({ type: "session", message })).toEqual({
+    type: "session",
+    message,
+  });
+});

@@ -739,3 +739,40 @@ describe("selectProjectedTimelinePage", () => {
     expect(page.endSeq).toBe(501);
   });
 });
+
+test("preserves async metadata updates without joining neighboring messages", () => {
+  const questions = [{ title: "Pick", options: ["A", "B"] }];
+  const rows: AgentTimelineRow[] = [
+    {
+      seq: 1,
+      timestamp: "2026-09-07T00:00:00Z",
+      item: { type: "assistant_message", text: "Pick", messageId: "q" },
+    },
+    {
+      seq: 2,
+      timestamp: "2026-09-07T00:00:00Z",
+      item: { type: "assistant_message", text: "", messageId: "q", delivery: "async", questions },
+    },
+    {
+      seq: 3,
+      timestamp: "2026-09-07T00:00:00Z",
+      item: { type: "assistant_message", text: "Continuing independently" },
+    },
+    {
+      seq: 4,
+      timestamp: "2026-09-07T00:00:00Z",
+      item: { type: "assistant_message", text: "Second question", delivery: "async", questions },
+    },
+  ];
+  const projected = projectTimelineRows({ rows, mode: "projected" });
+  expect(projected).toHaveLength(3);
+  expect(projected[0].item).toEqual({
+    type: "assistant_message",
+    text: "Pick",
+    messageId: "q",
+    delivery: "async",
+    questions,
+  });
+  expect(projected[1].item).toEqual(rows[2].item);
+  expect(projected[2].item).toEqual(rows[3].item);
+});

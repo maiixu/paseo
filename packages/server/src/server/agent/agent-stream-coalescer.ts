@@ -78,7 +78,15 @@ function isSameTextStream(previous: PendingTextEntry, next: PendingTextEntry): b
     return false;
   }
   if (previous.item.type === "assistant_message" && next.item.type === "assistant_message") {
-    return previous.item.messageId === next.item.messageId;
+    const structured =
+      previous.item.delivery === "async" ||
+      next.item.delivery === "async" ||
+      previous.item.questions?.length ||
+      next.item.questions?.length;
+    return (
+      previous.item.messageId === next.item.messageId &&
+      (!structured || Boolean(next.item.messageId))
+    );
   }
   return true;
 }
@@ -100,7 +108,14 @@ export class AgentStreamCoalescer {
       return false;
     }
 
-    if (isTextTimelineItem(event.item) && event.item.text === "") {
+    if (
+      isTextTimelineItem(event.item) &&
+      event.item.text === "" &&
+      !(
+        event.item.type === "assistant_message" &&
+        (event.item.delivery === "async" || event.item.questions?.length)
+      )
+    ) {
       return true;
     }
 
@@ -256,6 +271,7 @@ export class AgentStreamCoalescer {
         previous.turnId === entry.turnId
       ) {
         previous.text += entry.text;
+        previous.item = { ...previous.item, ...entry.item };
         continue;
       }
 

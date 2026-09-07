@@ -691,6 +691,10 @@ export const AgentTimelineItemPayloadSchema: z.ZodType<AgentTimelineItem, unknow
     type: z.literal("assistant_message"),
     text: z.string(),
     messageId: z.string().optional(),
+    delivery: z.literal("async").optional(),
+    questions: z
+      .array(z.object({ title: z.string(), options: z.array(z.string()).nullable() }))
+      .optional(),
   }),
   z.object({
     type: z.literal("reasoning"),

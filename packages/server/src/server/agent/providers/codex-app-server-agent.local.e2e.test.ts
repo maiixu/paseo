@@ -123,7 +123,7 @@ function assistantMessageSse(text: string): string {
   ]);
 }
 
-async function startMockResponsesServer(sequence: string[]): Promise<{
+async function startMockResponsesServer(sequence: Array<string | Promise<string>>): Promise<{
   url: string;
   close: () => Promise<void>;
   requestBodies: string[];
@@ -133,7 +133,7 @@ async function startMockResponsesServer(sequence: string[]): Promise<{
   const server = createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-    req.on("end", () => {
+    req.on("end", async () => {
       requestBodies.push(Buffer.concat(chunks).toString("utf8"));
       if (req.method !== "POST" || req.url !== "/v1/responses") {
         res.statusCode = 404;
@@ -145,7 +145,7 @@ async function startMockResponsesServer(sequence: string[]): Promise<{
       res.statusCode = 200;
       res.setHeader("content-type", "text/event-stream");
       res.setHeader("cache-control", "no-cache");
-      res.end(body);
+      res.end(await body);
     });
   });
 
@@ -168,12 +168,12 @@ async function startMockResponsesServer(sequence: string[]): Promise<{
   };
 }
 
-function writeMockCodexConfig(codexHome: string, serverUrl: string): void {
+function writeMockCodexConfig(codexHome: string, serverUrl: string, model = "mock-model"): void {
   writeFileSync(
     path.join(codexHome, "config.toml"),
     `
-model = "mock-model"
-approval_policy = "untrusted"
+model = "${model}"
+approval_policy = "never"
 sandbox_mode = "read-only"
 
 model_provider = "mock_provider"
@@ -214,6 +214,127 @@ function waitForEvent<TEvent extends AgentStreamEvent>(params: {
 }
 
 describe("Codex app-server provider (local e2e)", () => {
+  test.runIf(isCodexInstalled())(
+    "preserves native async question metadata without blocking on a permission",
+    async () => {
+      const cwd = mkdtempSync(path.join(os.tmpdir(), "codex-async-question-cwd-"));
+      const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-async-question-home-"));
+      const questions = [{ title: "Choose the approach", options: ["Task fit", "Quota first"] }];
+      let releaseResponse!: (body: string) => void;
+      const responseGate = new Promise<string>((resolve) => {
+        releaseResponse = resolve;
+      });
+      const mockServer = await startMockResponsesServer([
+        sse([
+          responseCreated("resp-async"),
+          functionCallEvent(
+            "async-question-1",
+            "request_user_input_async",
+            JSON.stringify({ questions }),
+          ),
+          responseCompleted("resp-async"),
+        ]),
+        responseGate,
+        assistantMessageSse("Answer received."),
+      ]);
+      try {
+        writeMockCodexConfig(codexHome, mockServer.url, "gpt-6-astra");
+        const client = new CodexAppServerAgentClient(createTestLogger());
+        const session = await client.createSession(
+          {
+            provider: "codex",
+            cwd,
+            modeId: "auto",
+            model: "gpt-6-astra",
+            thinkingOptionId: "medium",
+          },
+          { env: { CODEX_HOME: codexHome } },
+        );
+        try {
+          const events: AgentStreamEvent[] = [];
+          session.subscribe((event) => {
+            events.push(event);
+          });
+          const finished = waitForEvent({
+            session,
+            timeoutMs: 15000,
+            label: "async question turn completion",
+            predicate: (
+              event,
+            ): event is Extract<AgentStreamEvent, { type: "turn_completed" | "turn_failed" }> =>
+              event.type === "turn_completed" || event.type === "turn_failed",
+          });
+          const questionArrived = waitForEvent({
+            session,
+            timeoutMs: 15000,
+            label: "async question",
+            predicate: (event): event is Extract<AgentStreamEvent, { type: "timeline" }> =>
+              event.type === "timeline" &&
+              event.item.type === "assistant_message" &&
+              Boolean(event.item.questions?.length),
+          });
+          const turn = await session.startTurn("Ask which approach to use, then keep working.");
+          await questionArrived;
+          const reply = "Choose the approach\nTask fit";
+          expect(await session.steerActiveTurn?.(reply, { expectedTurnId: turn.turnId })).toEqual({
+            status: "accepted",
+          });
+          releaseResponse(assistantMessageSse("I can keep working while you decide."));
+          expect((await finished).type).toBe("turn_completed");
+          expect(events.filter((event) => event.type === "permission_requested")).toEqual([]);
+          const question = events.find(
+            (event) =>
+              event.type === "timeline" &&
+              event.item.type === "assistant_message" &&
+              event.item.questions?.length,
+          );
+          expect(question).toMatchObject({
+            type: "timeline",
+            item: { type: "assistant_message", delivery: "async", questions },
+          });
+          expect(mockServer.requestBodies.length).toBeGreaterThanOrEqual(2);
+          expect(
+            mockServer.requestBodies.some((body) =>
+              body.includes("Choose the approach\\nTask fit"),
+            ),
+          ).toBe(true);
+          expect(events.filter((event) => event.type === "turn_canceled")).toEqual([]);
+          const handle = session.describePersistence();
+          expect(handle).not.toBeNull();
+          await session.close();
+          const resumed = await client.resumeSession(handle!, undefined, {
+            env: { CODEX_HOME: codexHome },
+          });
+          try {
+            const history: AgentStreamEvent[] = [];
+            for await (const event of resumed.streamHistory()) history.push(event);
+            expect(
+              history.find(
+                (event) =>
+                  event.type === "timeline" &&
+                  event.item.type === "assistant_message" &&
+                  event.item.questions?.length,
+              ),
+            ).toMatchObject({
+              type: "timeline",
+              item: { delivery: "async", questions },
+            });
+          } finally {
+            await resumed.close();
+          }
+        } finally {
+          await session.close();
+        }
+      } finally {
+        releaseResponse(assistantMessageSse("done"));
+        await mockServer.close();
+        rmSync(cwd, { recursive: true, force: true });
+        rmSync(codexHome, { recursive: true, force: true });
+      }
+    },
+    30000,
+  );
+
   test.runIf(isCodexInstalled())(
     "surfaces request_user_input from the app-server as question permissions and timeline tool calls",
     async () => {

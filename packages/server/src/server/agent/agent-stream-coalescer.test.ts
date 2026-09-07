@@ -696,3 +696,24 @@ describe("AgentStreamCoalescer", () => {
     ]);
   });
 });
+
+test("coalesces async metadata-only completion and preserves unnamed question boundaries", () => {
+  const { coalescer, flushes } = createHarness();
+  const questions = [{ title: "Pick", options: null }];
+  coalescer.handle("agent", assistant("Pick", { messageId: "q" }));
+  coalescer.handle(
+    "agent",
+    timeline({ type: "assistant_message", text: "", messageId: "q", delivery: "async", questions }),
+  );
+  coalescer.handle("agent", assistant("Other text"));
+  coalescer.handle(
+    "agent",
+    timeline({ type: "assistant_message", text: "Another", delivery: "async", questions }),
+  );
+  coalescer.flushAll();
+  expect(flushes.map((entry) => entry.item)).toEqual([
+    { type: "assistant_message", text: "Pick", messageId: "q", delivery: "async", questions },
+    { type: "assistant_message", text: "Other text" },
+    { type: "assistant_message", text: "Another", delivery: "async", questions },
+  ]);
+});
