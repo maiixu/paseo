@@ -31,6 +31,7 @@ import {
   type DirectoryTransaction,
 } from "./transaction";
 import { workspaceLabels } from "@/workspace-labels";
+import { OptionalCacheReader } from "@/runtime/optional-cache-reader";
 import type {
   CachedDirectory,
   CachedWorkspace,
@@ -39,7 +40,6 @@ import type {
 } from "@/runtime/replica-cache";
 
 const PAGE_LIMIT = 200;
-const ONLINE_CACHE_WAIT_MS = 1000;
 const AGENT_SORT: NonNullable<FetchAgentsOptions["sort"]> = [
   { key: "updated_at", direction: "desc" },
 ];
@@ -122,8 +122,7 @@ export class DirectorySync {
   private readonly abortSessionWaits = new Set<() => void>();
   private cacheLoad: Promise<void> | null = null;
   private cacheAccepted = false;
-  private cacheAbandoned = false;
-  private onlineCacheLoad: Promise<void> | null = null;
+  private readonly cacheReader = new OptionalCacheReader();
   private revision = 0;
   private workspaceRevision = 0;
   private readonly routeDemandIds = new Set<string>();
@@ -147,6 +146,7 @@ export class DirectorySync {
   }
 
   connectionChanged(connection: DirectoryConnection): boolean {
+    this.cacheReader.setOnline(connection.status === "online");
     const changed =
       this.connection.client !== connection.client ||
       this.connection.source.clientGeneration !== connection.source.clientGeneration ||
@@ -260,6 +260,7 @@ export class DirectorySync {
   }
 
   dispose(): void {
+    this.cacheReader.setOnline(false);
     this.flushAbortedTransactions();
     this.abortPendingSessionWaits();
     this.unsubscribe?.();
@@ -327,7 +328,8 @@ export class DirectorySync {
     if (!this.checkpoints) return;
     if (useSessionStore.getState().sessions[this.serverId]?.agents.has(agentId)) return;
     const token = this.agents.captureCache(agentId);
-    const agent = await this.checkpoints.readAgent(this.serverId, agentId);
+    const checkpoints = this.checkpoints;
+    const agent = await this.readOptionalCache(() => checkpoints.readAgent(this.serverId, agentId));
     if (!agent) return;
     const session = useSessionStore.getState().sessions[this.serverId];
     if (!session || session.agents.has(agentId)) return;
@@ -348,7 +350,10 @@ export class DirectorySync {
     if (!this.checkpoints) return;
     if (useSessionStore.getState().sessions[this.serverId]?.workspaces.has(workspaceId)) return;
     const revision = this.workspaceRevision;
-    const cached = await this.checkpoints.readWorkspace(this.serverId, workspaceId);
+    const checkpoints = this.checkpoints;
+    const cached = await this.readOptionalCache(() =>
+      checkpoints.readWorkspace(this.serverId, workspaceId),
+    );
     if (!cached) return;
     if (this.workspaceRevision !== revision) return;
     const session = useSessionStore.getState().sessions[this.serverId];
@@ -368,9 +373,8 @@ export class DirectorySync {
       const initialProjects = initial.projects;
       const pristine =
         initialAgents.size === 0 && initialWorkspaces.size === 0 && initialProjects.size === 0;
-      const cached = await checkpoints.readDirectory(this.serverId);
-      if (this.cacheAbandoned || this.cacheAccepted || !pristine || this.revision !== revision)
-        return;
+      const cached = await this.readOptionalCache(() => checkpoints.readDirectory(this.serverId));
+      if (!cached || this.cacheAccepted || !pristine || this.revision !== revision) return;
       const session = useSessionStore.getState().sessions[this.serverId];
       if (
         !session ||
@@ -388,33 +392,8 @@ export class DirectorySync {
     return this.cacheLoad;
   }
 
-  private loadCachedDirectoryForRefresh(): Promise<void> {
-    if (!this.checkpoints || !this.getOnlineConnection()) return this.loadCachedDirectory();
-    if (this.onlineCacheLoad) return this.onlineCacheLoad;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const deadline = new Promise<"timeout">((resolve) => {
-      timer = setTimeout(() => resolve("timeout"), ONLINE_CACHE_WAIT_MS);
-    });
-    this.onlineCacheLoad = Promise.race([
-      this.loadCachedDirectory().then(
-        () => null,
-        () => "error" as const,
-      ),
-      deadline,
-    ])
-      .then((failure) => {
-        if (!failure) return undefined;
-        // Storage is optional while online. A late read must not seed rows or
-        // cursors after the daemon's authoritative refresh has started.
-        this.cacheAbandoned = true;
-        console.warn("[DirectorySync] Optional directory cache unavailable", {
-          reason: failure,
-          action: "continue_with_daemon_snapshot",
-        });
-        return undefined;
-      })
-      .finally(() => clearTimeout(timer));
-    return this.onlineCacheLoad;
+  readOptionalCache<T>(read: () => Promise<T>): Promise<T | undefined> {
+    return this.cacheReader.read(read);
   }
 
   async fetchTimeline(
@@ -443,7 +422,7 @@ export class DirectorySync {
   ): Promise<RefreshAgentDirectoryResult> {
     if (loadDirectoryCache) {
       this.primeAgentTransactionForCacheLoad();
-      await this.loadCachedDirectoryForRefresh();
+      await this.loadCachedDirectory();
     }
     const onlineConnection = this.getOnlineConnection();
     if (!onlineConnection) {
@@ -531,7 +510,7 @@ export class DirectorySync {
     input: { subscribe?: boolean } | undefined,
     loadDirectoryCache: boolean,
   ): Promise<void> {
-    if (loadDirectoryCache) await this.loadCachedDirectoryForRefresh();
+    if (loadDirectoryCache) await this.loadCachedDirectory();
     const onlineConnection = this.getOnlineConnection();
     if (!onlineConnection) return;
     const { client, source } = onlineConnection;

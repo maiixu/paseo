@@ -585,6 +585,50 @@ describe("DirectorySync session readiness", () => {
     },
   );
 
+  it("releases pending route preparation when the host connects with unavailable cache", async () => {
+    const serverId = "pending-route-cache";
+    serverIds.add(serverId);
+    const client = new FakeDirectoryClient();
+    const pending = new Promise<undefined>(() => undefined);
+    const directory = new DirectorySync(
+      serverId,
+      {
+        onAgentStoppedRunning: () => undefined,
+        markAgentLoading: () => undefined,
+        markAgentReady: () => undefined,
+        markAgentError: () => undefined,
+      },
+      {
+        readAgent: () => pending,
+        readWorkspace: () => pending,
+        readDirectory: async () => ({
+          agents: new Map(),
+          workspaces: new Map(),
+          projects: new Map(),
+        }),
+        commitDirectory: () => undefined,
+      },
+    );
+    useSessionStore.getState().initializeSession(serverId, null);
+    let prepared = false;
+    const preparation = Promise.all([
+      directory.prepareAgentRoute("agent-1"),
+      directory.prepareWorkspaceRoute("workspace-1"),
+    ]).then(() => {
+      prepared = true;
+      return undefined;
+    });
+    directory.connectionChanged({
+      client: client as unknown as DaemonClient,
+      status: "online",
+      source: { clientGeneration: 1, connectionEpoch: 1 },
+    });
+
+    await expect.poll(() => prepared, { timeout: 2000 }).toBe(true);
+    await preparation;
+    directory.dispose();
+  });
+
   it("continues both online refreshes after a shared cache read rejects", async () => {
     const serverId = "rejected-directory-cache";
     serverIds.add(serverId);

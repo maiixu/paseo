@@ -1663,7 +1663,12 @@ export class HostRuntimeStore {
       newServerId,
       createTimelineReplica({
         serverId: newServerId,
-        storage: this.replicaCache,
+        storage: {
+          readTimeline: (serverId, agentId) =>
+            directory.readOptionalCache(() => this.replicaCache.readTimeline(serverId, agentId)),
+          commitTimeline: (serverId, agentId, timeline) =>
+            this.replicaCache.commitTimeline(serverId, agentId, timeline),
+        },
         prepareAgent: (agentId) => directory.prepareAgentRoute(agentId),
       }),
     );
@@ -2081,7 +2086,12 @@ export class HostRuntimeStore {
         host.serverId,
         createTimelineReplica({
           serverId: host.serverId,
-          storage: this.replicaCache,
+          storage: {
+            readTimeline: (serverId, agentId) =>
+              directory.readOptionalCache(() => this.replicaCache.readTimeline(serverId, agentId)),
+            commitTimeline: (serverId, agentId, timeline) =>
+              this.replicaCache.commitTimeline(serverId, agentId, timeline),
+          },
           prepareAgent: (agentId) => directory.prepareAgentRoute(agentId),
         }),
       );

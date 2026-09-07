@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { OptionalCacheReader } from "@/runtime/optional-cache-reader";
 import type { AgentStreamEventPayload } from "@getpaseo/protocol/messages";
 import type { CachedTimeline } from "@/runtime/replica-cache";
 import { selectAgentTimelineState, useSessionStore } from "@/stores/session-store";
@@ -32,7 +33,10 @@ function cachedTimeline(): CachedTimeline {
   };
 }
 
-function createOwner(storage: TimelineReplicaStorage): ViewedTimelineOwner {
+function createOwner(
+  storage: TimelineReplicaStorage,
+  onFetch: () => void = () => undefined,
+): ViewedTimelineOwner {
   const replica = createTimelineReplica({
     serverId: SERVER_ID,
     storage,
@@ -47,7 +51,10 @@ function createOwner(storage: TimelineReplicaStorage): ViewedTimelineOwner {
       initialDeliveryMode: "legacy",
       setSubscription: async () => undefined,
       readCursor: () => undefined,
-      fetchPage: async () => ({ hasNewer: false, endCursor: null }),
+      fetchPage: async () => {
+        onFetch();
+        return { hasNewer: false, endCursor: null };
+      },
       fetchLatestTail: async () => ({ hasNewer: false, endCursor: null }),
       reportError: () => undefined,
       schedule: () => () => undefined,
@@ -70,6 +77,43 @@ function applySynced(agentId: string, seq: number): void {
 afterEach(() => useSessionStore.getState().clearSession(SERVER_ID));
 
 describe("viewed timeline persistence", () => {
+  it("fetches authoritative history when the optional timeline read stays pending", async () => {
+    useSessionStore.getState().initializeSession(SERVER_ID, null);
+    const cache = new OptionalCacheReader();
+    cache.setOnline(true);
+    let release!: (value: CachedTimeline) => void;
+    const read = new Promise<CachedTimeline>((resolve) => {
+      release = resolve;
+    });
+    let fetches = 0;
+    const owner = createOwner(
+      {
+        readTimeline: () => cache.read(() => read),
+        commitTimeline: () => undefined,
+      },
+      () => {
+        fetches += 1;
+      },
+    );
+    owner.setConnected(true);
+    owner.setActive(true);
+    owner.replaceVisibleAgentIds("test", [AGENT_ID]);
+
+    await expect.poll(() => fetches, { timeout: 2000 }).toBe(1);
+    expect(owner.getAgentTimelineStatus(AGENT_ID)).toBe("ready");
+    release(cachedTimeline());
+    await read;
+    await Promise.resolve();
+    expect(
+      selectAgentTimelineState(useSessionStore.getState().sessions[SERVER_ID], AGENT_ID),
+    ).toEqual({ status: "cold" });
+    applySynced(AGENT_ID, 8);
+    expect(
+      selectAgentTimelineState(useSessionStore.getState().sessions[SERVER_ID], AGENT_ID),
+    ).toMatchObject({ status: "synced", range: { endSeq: 8 } });
+    owner.dispose();
+  });
+
   it("shares an in-flight cache preparation with the viewed owner", async () => {
     useSessionStore.getState().initializeSession(SERVER_ID, null);
     let release!: (value: CachedTimeline) => void;
