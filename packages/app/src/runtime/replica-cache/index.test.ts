@@ -229,6 +229,29 @@ describe("ReplicaCache", () => {
     expect(restoredTimeline).toEqual(timeline());
   });
 
+  it("preserves structured async questions across a fresh cache reader", async () => {
+    const storage = new MemoryStorage();
+    const writer = createCache(storage);
+    const value = {
+      ...timeline(),
+      items: [
+        {
+          ...timelineItem(),
+          text: "Cached",
+          kind: "assistant_message" as const,
+          delivery: "async" as const,
+          questions: [
+            { title: "Choose", options: ["A", "B"] },
+            { title: "Details", options: null },
+          ],
+        },
+      ],
+    };
+    writer.commitTimeline(SERVER_ID, "agent-1", value);
+    await writer.flush();
+    expect(await createCache(storage).readTimeline(SERVER_ID, "agent-1")).toEqual(value);
+  });
+
   it("never reads directory rows older than an accepted deferred deletion", async () => {
     const storage = new MemoryStorage();
     const cache = createCache(storage);

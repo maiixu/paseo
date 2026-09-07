@@ -21,6 +21,7 @@ import invariant from "tiny-invariant";
 import { shallow, useShallow } from "zustand/shallow";
 import { useStoreWithEqualityFn } from "zustand/traditional";
 import { AgentStreamView, type AgentStreamViewHandle } from "@/agent-stream/view";
+import { sendAsyncQuestionReply } from "@/agent-stream/async-questions/send";
 import { ArchivedAgentCallout } from "@/components/archived-agent-callout";
 import { KeyboardDock } from "@/components/keyboard-dock";
 import { FileDropZone } from "@/components/file-drop/file-drop-zone";
@@ -1531,8 +1532,17 @@ const AgentStreamSection = memo(function AgentStreamSection({
     return new Map(pendingPermissionList.map((permission) => [permission.key, permission]));
   }, [pendingPermissionList]);
 
+  const answerAsyncQuestion = useCallback(
+    async (text: string) => {
+      if (!agentId) throw new Error("Agent is unavailable.");
+      await sendAsyncQuestionReply(serverId, agentId, text);
+    },
+    [serverId, agentId],
+  );
+
   return (
     <AgentStreamView
+      onAnswerAsyncQuestion={agentId && hasActiveComposer ? answerAsyncQuestion : undefined}
       ref={streamViewRef}
       agentId={agent.id}
       serverId={serverId}

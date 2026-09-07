@@ -1841,6 +1841,42 @@ function mapCodexThreadImageItem(
   );
 }
 
+function normalizeCodexAsyncQuestions(
+  value: unknown,
+): Extract<AgentTimelineItem, { type: "assistant_message" }>["questions"] {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  const questions: NonNullable<
+    Extract<AgentTimelineItem, { type: "assistant_message" }>["questions"]
+  > = [];
+  for (const entry of value) {
+    const question = toObjectRecord(entry);
+    if (!question || typeof question.title !== "string" || !question.title.trim()) return undefined;
+    const options = question.options;
+    if (
+      options != null &&
+      (!Array.isArray(options) ||
+        !options.every((option) => typeof option === "string" && option.trim().length > 0))
+    )
+      return undefined;
+    questions.push({ title: question.title, options: options == null ? null : [...options] });
+  }
+  return questions;
+}
+
+function mapCodexThreadAgentMessageItem(
+  normalizedItem: Record<string, unknown>,
+): AgentTimelineItem {
+  const messageId = nonEmptyString(normalizedItem.id);
+  const questions = normalizeCodexAsyncQuestions(normalizedItem.questions);
+  return {
+    type: "assistant_message",
+    text: typeof normalizedItem.text === "string" ? normalizedItem.text : "",
+    ...(messageId ? { messageId } : {}),
+    ...(normalizedItem.delivery === "async" ? { delivery: "async" as const } : {}),
+    ...(questions ? { questions } : {}),
+  };
+}
+
 export function threadItemToTimeline(
   item: unknown,
   options?: { includeUserMessage?: boolean; cwd?: string | null },
@@ -1867,14 +1903,8 @@ export function threadItemToTimeline(
   switch (normalizedType) {
     case "userMessage":
       return mapCodexThreadUserMessageItem(normalizedItem, includeUserMessage);
-    case "agentMessage": {
-      const messageId = nonEmptyString(normalizedItem.id);
-      return {
-        type: "assistant_message",
-        text: typeof normalizedItem.text === "string" ? normalizedItem.text : "",
-        ...(messageId ? { messageId } : {}),
-      };
-    }
+    case "agentMessage":
+      return mapCodexThreadAgentMessageItem(normalizedItem);
     case "plan":
       return mapCodexThreadPlanItem(normalizedItem);
     case "reasoning":
@@ -6351,14 +6381,14 @@ export class CodexAppServerAgentSession implements AgentSession {
   ): AgentTimelineItem | null {
     if (!timelineItem.text.startsWith(streamedText)) return timelineItem;
     const suffix = timelineItem.text.slice(streamedText.length);
-    if (!suffix) return null;
-    return timelineItem.type === "assistant_message"
-      ? {
-          type: timelineItem.type,
-          text: suffix,
-          ...(timelineItem.messageId ? { messageId: timelineItem.messageId } : {}),
-        }
-      : { type: timelineItem.type, text: suffix };
+    // Async metadata may arrive only on completion, after all text deltas.
+    if (
+      !suffix &&
+      (timelineItem.type !== "assistant_message" ||
+        (!timelineItem.questions?.length && timelineItem.delivery !== "async"))
+    )
+      return null;
+    return { ...timelineItem, text: suffix };
   }
 
   private applyBufferedDeltaTextToTimelineItem(

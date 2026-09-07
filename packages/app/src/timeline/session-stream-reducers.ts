@@ -1,3 +1,4 @@
+import { areSeparateAsyncMessages } from "@/utils/async-question-metadata";
 import type { AgentStreamEventPayload } from "@getpaseo/protocol/messages";
 import { selectAgentTimelineState, useSessionStore } from "@/stores/session-store";
 import type { AssistantMessageItem, StreamItem, TodoEntry } from "@/types/stream";
@@ -199,6 +200,8 @@ function matchesProjectedRow(existing: StreamItem, incoming: StreamItem): boolea
     return (
       existing.messageId === incoming.messageId &&
       existing.text === incoming.text &&
+      existing.delivery === incoming.delivery &&
+      JSON.stringify(existing.questions) === JSON.stringify(incoming.questions) &&
       existing.timestamp.getTime() === incoming.timestamp.getTime()
     );
   }
@@ -715,7 +718,11 @@ function mergePrependedCanonicalTail(olderTail: StreamItem[], currentTail: Strea
     return [...olderTail, ...currentTail];
   }
 
+  if (areSeparateAsyncMessages(olderLast, currentFirst)) {
+    return [...olderTail, ...currentTail];
+  }
   const mergedAssistant: AssistantMessageItem = {
+    ...olderLast,
     ...currentFirst,
     text: `${olderLast.text}${currentFirst.text}`,
   };
@@ -821,6 +828,8 @@ function reconcileOverlappingProjectedAssistant(params: {
     id: blockGroupId ?? match.current.id,
     ...(messageId !== undefined ? { messageId } : {}),
     text: projectedText,
+    ...(unit.event.item.delivery ? { delivery: unit.event.item.delivery } : {}),
+    ...(unit.event.item.questions ? { questions: unit.event.item.questions } : {}),
     timestamp: unit.timestamp,
     timelineCursor: { epoch: params.epoch, seq: unit.seqEnd },
   };

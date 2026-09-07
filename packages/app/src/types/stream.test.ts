@@ -1980,3 +1980,69 @@ describe("turn lifecycle events", () => {
     );
   });
 });
+
+describe("async question messages", () => {
+  const questions = [{ title: "Choose a direction", options: ["Task fit", "Quota first"] }];
+  const text = "Choose a direction\n\n- Task fit\n- Quota first";
+  const timestamp = new Date("2026-09-07T10:00:00Z");
+  const questionEvent = (chunk: string): AgentStreamEventPayload => ({
+    type: "timeline",
+    provider: "codex",
+    item: {
+      type: "assistant_message",
+      messageId: "question-1",
+      text: chunk,
+      delivery: "async",
+      questions,
+    },
+  });
+
+  it("keeps a complete question atomic through streaming and completion", () => {
+    const live = applyStreamEvent({ tail: [], head: [], event: questionEvent(text), timestamp });
+    expect(live.tail).toEqual([]);
+    expect(live.head).toHaveLength(1);
+    const completed = applyStreamEvent({
+      ...live,
+      event: { type: "turn_completed", provider: "codex" },
+      timestamp,
+    });
+    expect(completed.tail).toEqual([
+      expect.objectContaining({ text, delivery: "async", questions }),
+    ]);
+  });
+
+  it("reassembles already promoted text blocks when final question metadata arrives", () => {
+    const streamed = applyStreamEvent({
+      tail: [],
+      head: [],
+      event: assistantTimeline(text, "codex", "question-1"),
+      timestamp,
+    });
+    expect(streamed.tail.length).toBeGreaterThan(0);
+    const completed = applyStreamEvent({ ...streamed, event: questionEvent(""), timestamp });
+    expect([...completed.tail, ...completed.head]).toEqual([
+      expect.objectContaining({ text, messageId: "question-1", delivery: "async", questions }),
+    ]);
+  });
+
+  it("keeps neighboring commentary separate from a question with no message ID", () => {
+    const question: AgentStreamEventPayload = {
+      type: "timeline",
+      provider: "codex",
+      item: { type: "assistant_message", text, delivery: "async", questions },
+    };
+    let state: StreamItem[] = [];
+    for (const event of [
+      assistantTimeline("Before", "codex"),
+      question,
+      assistantTimeline("After", "codex"),
+    ]) {
+      state = reduceStreamUpdate(state, event, timestamp);
+    }
+    expect(state.map((item) => (item.kind === "assistant_message" ? item.text : ""))).toEqual([
+      "Before",
+      text,
+      "After",
+    ]);
+  });
+});

@@ -1,5 +1,7 @@
+import { asyncQuestionMetadata, isAsyncQuestionMessage } from "@/utils/async-question-metadata";
 import type {
   AgentProvider,
+  AgentAsyncUserInputQuestion,
   AgentTimelineItem,
   ToolCallDetail,
 } from "@getpaseo/protocol/agent-types";
@@ -683,6 +685,8 @@ export function replaceWithCanonicalStream(
 
 export interface AssistantMessageItem {
   kind: "assistant_message";
+  delivery?: "async";
+  questions?: AgentAsyncUserInputQuestion[];
   id: string;
   messageId?: string;
   turnId?: string;
@@ -896,20 +900,26 @@ function appendAssistantMessage(
   messageId?: string,
   reservedItemIds?: ReadonlySet<string>,
   timelineCursor?: TimelinePosition,
+  metadata: Pick<AssistantMessageItem, "delivery" | "questions"> = {},
 ): StreamItem[] {
   const { chunk, hasContent } = normalizeChunk(text);
-  if (!chunk) {
+  const structured = isAsyncQuestionMessage(metadata);
+  if (!chunk && !structured) {
     return state;
   }
+  const canExtend = (item: AssistantMessageItem) => {
+    const atomic = structured || isAsyncQuestionMessage(item);
+    return atomic
+      ? Boolean(messageId && item.messageId === messageId)
+      : messageId === undefined || item.messageId === messageId;
+  };
 
   const last = state[state.length - 1];
-  const shouldAppendToLast =
-    last &&
-    last.kind === "assistant_message" &&
-    (messageId === undefined || last.messageId === messageId);
+  const shouldAppendToLast = last && last.kind === "assistant_message" && canExtend(last);
   if (shouldAppendToLast) {
     const updated: AssistantMessageItem = {
       ...last,
+      ...metadata,
       text: `${last.text}${chunk}`,
       timestamp,
       ...(timelineCursor ? { timelineCursor } : {}),
@@ -924,10 +934,11 @@ function appendAssistantMessage(
     source === "live" &&
     last?.kind === "user_message" &&
     secondLast?.kind === "assistant_message" &&
-    (messageId === undefined || secondLast.messageId === messageId)
+    canExtend(secondLast)
   ) {
     const updated: AssistantMessageItem = {
       ...secondLast,
+      ...metadata,
       text: `${secondLast.text}${chunk}`,
       timestamp,
       ...(timelineCursor ? { timelineCursor } : {}),
@@ -935,7 +946,7 @@ function appendAssistantMessage(
     return [...state.slice(0, -2), updated, last];
   }
 
-  if (!hasContent) {
+  if (!hasContent && !structured) {
     return state;
   }
 
@@ -943,6 +954,7 @@ function appendAssistantMessage(
   const entryId = createAssistantItemId(state, messageId, idSeed, timestamp, reservedItemIds);
   const item: AssistantMessageItem = {
     kind: "assistant_message",
+    ...metadata,
     id: entryId,
     ...(messageId ? { messageId } : {}),
     ...(timelineCursor ? { timelineCursor } : {}),
@@ -1481,6 +1493,7 @@ function reduceTimelineEvent(
           item.messageId,
           reservedItemIds,
           timelineCursor,
+          asyncQuestionMetadata(item),
         ),
       );
     case "reasoning":
@@ -1753,6 +1766,31 @@ function promoteCompletedAssistantBlocks(params: { tail: StreamItem[]; head: Str
     };
   }
 
+  if (activeItem.delivery === "async" || activeItem.questions?.length) {
+    // The final app-server item can add question metadata after text deltas have
+    // already been promoted. Reunite those blocks into one interactive card.
+    const { blockGroupId, blockIndex: _blockIndex, ...message } = activeItem;
+    if (!blockGroupId) {
+      return { tail: params.tail, head: params.head, changedTail: false, changedHead: false };
+    }
+    const belongsToQuestion = (item: StreamItem): item is AssistantMessageItem =>
+      item.kind === "assistant_message" && item.blockGroupId === blockGroupId;
+    const blocks = [...params.tail, ...params.head].filter(belongsToQuestion);
+    const replacement: AssistantMessageItem = {
+      ...message,
+      id: blockGroupId,
+      text: blocks.map((block) => block.text).join("\n\n"),
+    };
+    return {
+      tail: params.tail.filter((item) => !belongsToQuestion(item)),
+      head: params.head.flatMap<StreamItem>((item) => {
+        if (item === activeItem) return [replacement];
+        return belongsToQuestion(item) ? [] : [item];
+      }),
+      changedTail: blocks.length > 1,
+      changedHead: true,
+    };
+  }
   const blocks = splitMarkdownBlocks(activeItem.text);
   if (blocks.length < 2) {
     return {

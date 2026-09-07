@@ -27,6 +27,7 @@ import {
   mapCodexPlanToToolCall,
   normalizeCodexOutputSchema,
   toAgentUsage,
+  threadItemToTimeline,
 } from "./codex-app-server-agent.js";
 
 describe("mapCodexPlanUpdateToTodo", () => {
@@ -5976,5 +5977,69 @@ describe("Codex denied plan approvals", () => {
       detail: { type: "plan", text: "Ship the thing" },
       metadata: { approved: false },
     });
+  });
+});
+
+describe("Codex async user input", () => {
+  const questions = [
+    { title: "Choose a direction", options: ["A", "B"] },
+    { title: "Any constraint?", options: null },
+  ];
+  const item = {
+    type: "agentMessage",
+    id: "async-question-1",
+    text: "Choose a direction\n- A\n- B",
+    delivery: "async",
+    questions,
+  };
+
+  test("preserves structured questions in history and live completion without a permission", () => {
+    const expected = {
+      type: "assistant_message",
+      messageId: item.id,
+      text: item.text,
+      delivery: "async",
+      questions,
+    };
+    expect(threadItemToTimeline(item)).toEqual(expected);
+    const session = createSession();
+    const events: AgentStreamEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    asInternals(session).handleNotification("item/started", { item });
+    asInternals(session).handleNotification("item/completed", { item });
+    expect(events.filter((event) => event.type === "timeline")).toMatchObject([{ item: expected }]);
+    expect(events.some((event) => event.type === "permission_requested")).toBe(false);
+  });
+
+  test("does not discard async metadata when the final text was already streamed", () => {
+    const session = createSession();
+    const events: AgentStreamEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    asInternals(session).handleNotification("item/agentMessage/delta", {
+      itemId: item.id,
+      delta: item.text,
+    });
+    asInternals(session).handleNotification("item/completed", { item });
+    expect(events.findLast((event) => event.type === "timeline")).toMatchObject({
+      item: {
+        type: "assistant_message",
+        messageId: item.id,
+        text: "",
+        delivery: "async",
+        questions,
+      },
+    });
+  });
+
+  test("keeps ordinary text usable when optional question metadata is malformed", () => {
+    expect(threadItemToTimeline({ ...item, questions: [{ title: "A", options: [42] }] })).toEqual({
+      type: "assistant_message",
+      messageId: item.id,
+      text: item.text,
+      delivery: "async",
+    });
+    expect(
+      threadItemToTimeline({ type: "agentMessage", id: "plain", text: "Hello", questions: null }),
+    ).toEqual({ type: "assistant_message", messageId: "plain", text: "Hello" });
   });
 });

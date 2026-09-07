@@ -1,3 +1,4 @@
+import { asyncQuestionMetadata } from "@/utils/async-question-metadata";
 import { z } from "zod";
 import {
   AgentStatusSchema,
@@ -85,6 +86,10 @@ const StoredTimelineItemSchema = z.discriminatedUnion("kind", [
     ...TimelineItemBaseShape,
     kind: z.literal("assistant_message"),
     messageId: z.string().optional(),
+    delivery: z.literal("async").optional(),
+    questions: z
+      .array(z.object({ title: z.string(), options: z.array(z.string()).nullable() }))
+      .optional(),
     text: z.string(),
     blockGroupId: z.string().optional(),
     blockIndex: z.number().int().nonnegative().optional(),
@@ -406,6 +411,7 @@ function serializeTimelineItem(item: StreamItem): StoredTimelineItem | null {
       return {
         ...base,
         kind: item.kind,
+        ...asyncQuestionMetadata(item),
         ...(item.messageId ? { messageId: item.messageId } : {}),
         text: item.text,
         ...(item.blockGroupId ? { blockGroupId: item.blockGroupId } : {}),
@@ -476,6 +482,7 @@ function deserializeTimelineItem(item: StoredTimelineItem): StreamItem {
       return {
         ...base,
         kind: item.kind,
+        ...asyncQuestionMetadata(item),
         ...(item.messageId ? { messageId: item.messageId } : {}),
         text: item.text,
         ...(item.blockGroupId ? { blockGroupId: item.blockGroupId } : {}),

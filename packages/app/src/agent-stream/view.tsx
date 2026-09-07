@@ -60,6 +60,8 @@ import { returnToTimelineTail } from "./timeline-tail-navigation";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { ToolCallDetailsContent } from "@/components/tool-call-details";
 import { QuestionFormCard } from "@/components/question-form-card";
+import { AsyncQuestionCard } from "./async-questions/card";
+import { createAsyncQuestionForm, type AsyncQuestionForm } from "./async-questions/model";
 import { ToolCallSheetProvider } from "@/components/tool-call-sheet";
 import {
   prepareToolCallHistory,
@@ -289,6 +291,7 @@ export interface AgentStreamViewProps {
   toast?: ToastApi | null;
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
   readOnly?: boolean;
+  onAnswerAsyncQuestion?: (text: string) => Promise<void>;
   historyPagination?: {
     hasOlder: boolean;
     isLoadingOlder: boolean;
@@ -343,6 +346,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       toast,
       onOpenWorkspaceFile,
       readOnly = false,
+      onAnswerAsyncQuestion,
       historyPagination,
     },
     ref,
@@ -375,6 +379,10 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
 
     // Get serverId (fallback to agent's serverId if not provided)
     const resolvedServerId = serverId ?? context.serverId ?? "";
+    const asyncQuestionForms = useMemo(
+      () => ({ agentId, serverId: resolvedServerId, forms: new Map<string, AsyncQuestionForm>() }),
+      [agentId, resolvedServerId],
+    );
 
     const client = useSessionStore((state) => state.sessions[resolvedServerId]?.client ?? null);
     const sessionStreamHead = useSessionStore((state) =>
@@ -714,6 +722,19 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
 
     const renderAssistantMessageItem = useCallback(
       (layoutItem: StreamLayoutItem, item: Extract<StreamItem, { kind: "assistant_message" }>) => {
+        if (!readOnly && onAnswerAsyncQuestion && item.questions?.length) {
+          const key = `${item.messageId ?? item.id}:${JSON.stringify(item.questions)}`;
+          let form = asyncQuestionForms.forms.get(key);
+          if (!form) {
+            form = createAsyncQuestionForm(item.questions);
+            asyncQuestionForms.forms.set(key, form);
+          }
+          return (
+            <View style={stylesheet.contentWrapper}>
+              <AsyncQuestionCard form={form} onSend={onAnswerAsyncQuestion} />
+            </View>
+          );
+        }
         return (
           <AssistantFileLinkResolverProvider
             client={client}
@@ -735,7 +756,17 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           </AssistantFileLinkResolverProvider>
         );
       },
-      [agentId, client, handleInlinePathPress, resolvedServerId, toast, workspaceRoot],
+      [
+        agentId,
+        client,
+        handleInlinePathPress,
+        resolvedServerId,
+        toast,
+        workspaceRoot,
+        readOnly,
+        onAnswerAsyncQuestion,
+        asyncQuestionForms,
+      ],
     );
 
     const renderThoughtItem = useCallback(

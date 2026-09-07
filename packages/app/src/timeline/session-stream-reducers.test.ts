@@ -3130,6 +3130,35 @@ describe("processTimelineResponse", () => {
     expect(result.cursor).toBe(existingCursor);
   });
 
+  it("does not merge an older async question into neighboring commentary", () => {
+    const questions = [{ title: "Choose", options: ["A", "B"] }];
+    const result = processTimelineResponse({
+      ...baseTimelineInput,
+      currentTail: [
+        {
+          ...makeAssistantItem("Continuing work", "newer"),
+          timelineCursor: { epoch: "epoch-1", seq: 3 },
+        },
+      ],
+      currentCursor: { epoch: "epoch-1", startSeq: 3, endSeq: 5 },
+      payload: {
+        ...baseTimelineInput.payload,
+        direction: "before",
+        epoch: "epoch-1",
+        startCursor: { seq: 1 },
+        endCursor: { seq: 2 },
+        entries: [
+          {
+            ...makeTimelineEntry(1, "Choose"),
+            item: { type: "assistant_message", text: "Choose", delivery: "async", questions },
+          },
+        ],
+      },
+    });
+    expect(getAssistantTexts(result.tail)).toEqual(["Choose", "Continuing work"]);
+    expect(result.tail[0]).toMatchObject({ delivery: "async", questions });
+  });
+
   it("merges assistant chunks across the older-page prepend boundary", () => {
     const currentTail = [
       {

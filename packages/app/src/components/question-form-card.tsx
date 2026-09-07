@@ -53,7 +53,7 @@ interface QuestionOptionRowProps {
   onToggle: (qIndex: number, optIndex: number, multiSelect: boolean) => void;
 }
 
-function QuestionOptionRow({
+export function QuestionOptionRow({
   qIndex,
   optIndex,
   option,
