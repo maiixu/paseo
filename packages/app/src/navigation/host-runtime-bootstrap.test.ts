@@ -412,7 +412,7 @@ describe("resolveHostIndexRoute", () => {
     ).toEqual("/new?serverId=cloud&draftId=draft-home");
   });
 
-  it("restores a workspace on the default host before creating a fresh draft", () => {
+  it("opens a fresh draft even when a workspace on the default host is remembered", () => {
     expect(
       resolveHostIndexRoute({
         serverId: "cloud",
@@ -420,7 +420,7 @@ describe("resolveHostIndexRoute", () => {
         workspaceSelection: { serverId: "cloud", workspaceId: "cloud-workspace" },
         workspaceSelectionStatus: "exists",
       }),
-    ).toEqual("/h/cloud/workspace/cloud-workspace");
+    ).toEqual("/new?serverId=cloud&draftId=draft-home");
   });
 
   it("restores the remembered workspace when the host index opens for the same host", () => {

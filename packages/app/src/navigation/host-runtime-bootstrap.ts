@@ -159,14 +159,14 @@ export function resolveHostIndexRoute(input: {
   workspaceSelection: ActiveWorkspaceSelection | null;
   workspaceSelectionStatus: WorkspaceSelectionStatus;
 }): Href {
+  if (input.newWorkspaceDraftId) {
+    return buildNewWorkspaceRoute({ serverId: input.serverId, draftId: input.newWorkspaceDraftId });
+  }
   if (
     input.workspaceSelection?.serverId === input.serverId &&
     shouldRestoreWorkspaceSelection(input)
   ) {
     return buildHostWorkspaceRoute(input.serverId, input.workspaceSelection.workspaceId);
-  }
-  if (input.newWorkspaceDraftId) {
-    return buildNewWorkspaceRoute({ serverId: input.serverId, draftId: input.newWorkspaceDraftId });
   }
   return buildOpenProjectRoute();
 }
