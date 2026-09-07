@@ -506,6 +506,132 @@ describe("DirectorySync session readiness", () => {
     directory.dispose();
   });
 
+  it.each(["agents", "workspaces"] as const)(
+    "fetches %s online when optional directory cache never settles",
+    async (kind) => {
+      const serverId = `pending-directory-cache-${kind}`;
+      serverIds.add(serverId);
+      const client = new FakeDirectoryClient();
+      let releaseCache!: (cached: CachedDirectory) => void;
+      const cacheRead = new Promise<CachedDirectory>((resolve) => {
+        releaseCache = resolve;
+      });
+      const directory = new DirectorySync(
+        serverId,
+        {
+          onAgentStoppedRunning: () => undefined,
+          markAgentLoading: () => undefined,
+          markAgentReady: () => undefined,
+          markAgentError: () => undefined,
+        },
+        {
+          readAgent: async () => undefined,
+          readWorkspace: async () => undefined,
+          readDirectory: () => cacheRead,
+          commitDirectory: () => undefined,
+        },
+      );
+      directory.connectionChanged({
+        client: client as unknown as DaemonClient,
+        status: "online",
+        source: { clientGeneration: 1, connectionEpoch: 1 },
+      });
+      const store = useSessionStore.getState();
+      store.initializeSession(serverId, client as unknown as DaemonClient, 1);
+      store.updateSessionServerInfo(serverId, {
+        serverId,
+        hostname: null,
+        version: "test",
+        features: { workspaceMultiplicity: true, directorySync: true },
+      });
+      const releaseAgents = client.holdAgentFetch();
+      const releaseWorkspaces = client.holdWorkspaceFetch();
+      const refresh = kind === "agents" ? directory.refreshAgents() : directory.refreshWorkspaces();
+
+      await expect
+        .poll(() => client.fetchAgentsCalls + client.fetchWorkspacesCalls, { timeout: 2000 })
+        .toBe(1);
+      releaseCache({
+        agents: new Map([["stale-agent", createAgent(serverId, "stale-agent")]]),
+        workspaces: new Map(),
+        projects: new Map(),
+        checkpoint: {
+          agents: { generation: "stale", afterSeq: 99 },
+          workspaces: { generation: "stale", afterSeq: 99 },
+        },
+      });
+      await cacheRead;
+      await Promise.resolve();
+      expect(useSessionStore.getState().sessions[serverId]?.agents.size).toBe(0);
+
+      releaseAgents({
+        requestId: "agents",
+        entries: [],
+        pageInfo: { hasMore: false, nextCursor: null, prevCursor: null },
+      });
+      releaseWorkspaces({
+        requestId: "workspaces",
+        entries: [],
+        emptyProjects: [],
+        pageInfo: { hasMore: false, nextCursor: null, prevCursor: null },
+      });
+      await refresh;
+      await directory.refreshAgents();
+      await directory.refreshWorkspaces();
+      expect(client.lastAgentOptions).not.toHaveProperty("sync.generation");
+      expect(client.lastWorkspaceOptions).not.toHaveProperty("sync.generation");
+      expect(useSessionStore.getState().sessions[serverId]?.agents.size).toBe(0);
+      directory.dispose();
+    },
+  );
+
+  it("continues both online refreshes after a shared cache read rejects", async () => {
+    const serverId = "rejected-directory-cache";
+    serverIds.add(serverId);
+    const client = new FakeDirectoryClient();
+    let cacheReads = 0;
+    const directory = new DirectorySync(
+      serverId,
+      {
+        onAgentStoppedRunning: () => undefined,
+        markAgentLoading: () => undefined,
+        markAgentReady: () => undefined,
+        markAgentError: () => undefined,
+      },
+      {
+        readAgent: async () => undefined,
+        readWorkspace: async () => undefined,
+        readDirectory: async () => {
+          cacheReads += 1;
+          throw new Error("Storage read failed");
+        },
+        commitDirectory: () => undefined,
+      },
+    );
+    directory.connectionChanged({
+      client: client as unknown as DaemonClient,
+      status: "online",
+      source: { clientGeneration: 1, connectionEpoch: 1 },
+    });
+    const store = useSessionStore.getState();
+    store.initializeSession(serverId, client as unknown as DaemonClient, 1);
+    store.updateSessionServerInfo(serverId, {
+      serverId,
+      hostname: null,
+      version: "test",
+      features: { workspaceMultiplicity: true },
+    });
+
+    await Promise.all([directory.refreshAgents(), directory.refreshWorkspaces()]);
+    await Promise.all([directory.refreshAgents(), directory.refreshWorkspaces()]);
+
+    expect(cacheReads).toBe(1);
+    expect(client.fetchAgentsCalls).toBe(2);
+    expect(client.fetchWorkspacesCalls).toBe(2);
+    expect(useSessionStore.getState().sessions[serverId]?.hasHydratedWorkspaces).toBe(true);
+    directory.dispose();
+  });
+
   it("publishes cached directory data before the authoritative request completes", async () => {
     const serverId = "cached-directory";
     serverIds.add(serverId);
