@@ -33,18 +33,18 @@ import {
 } from "lucide-react-native";
 import { identityForeground } from "@/styles/identity-colors";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
-import { getProviderIcon } from "@/components/provider-icons";
+import { getThemedProviderIcon } from "@/components/provider-icons";
 import {
   AGENT_PROFILE_COLORS,
   resolveAgentProfileColor,
-  resolveAgentProfileIconKey,
+  resolveAgentProfileGlyphName,
   type AgentProfileColor,
   type AgentProfileIconKey,
 } from "./profile-appearance";
 
-/** Drawn when a profile names no icon, and as the "default" cell in the picker grid. */
+/** Used when neither a recognized explicit icon nor a provider is available. */
 const ThemedDefaultIcon = withUnistyles(Star);
-const ThemedGeminiIcon = withUnistyles(getProviderIcon("gemini"));
+const ThemedGeminiIcon = getThemedProviderIcon("gemini");
 
 /**
  * `withUnistyles` has to wrap each icon once at module scope, so the registry
@@ -88,6 +88,7 @@ const THEMED_ICONS: Record<Exclude<AgentProfileIconKey, "gemini">, typeof Themed
 };
 
 const mutedMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
+const foregroundMapping = (theme: Theme) => ({ color: theme.colors.foreground });
 
 /**
  * One `uniProps` mapping per colour, built once. Building these inline would
@@ -117,17 +118,28 @@ export function agentProfileColorMapping(
 export function AgentProfileGlyph({
   icon,
   color,
+  provider,
   size = ICON_SIZE.md,
 }: {
   icon?: string | undefined;
   color?: string | undefined;
+  provider?: string | undefined;
   size?: number;
 }) {
-  const iconKey = resolveAgentProfileIconKey(icon);
-  const mapping = COLOR_MAPPINGS[resolveAgentProfileColor(color)];
-  if (iconKey === "gemini") {
-    return <ThemedGeminiIcon size={size} uniProps={mapping} />;
+  const glyph = resolveAgentProfileGlyphName(icon, provider);
+  const resolvedColor = resolveAgentProfileColor(color);
+  const mapping = COLOR_MAPPINGS[resolvedColor];
+  const brandMapping = resolvedColor === "none" ? foregroundMapping : mapping;
+  if (glyph.kind === "provider") {
+    const Icon = getThemedProviderIcon(glyph.id);
+    return <Icon size={size} uniProps={brandMapping} />;
   }
-  const Icon = iconKey ? THEMED_ICONS[iconKey] : ThemedDefaultIcon;
-  return <Icon size={size} uniProps={mapping} />;
+  if (glyph.kind === "custom") {
+    if (glyph.id === "gemini") {
+      return <ThemedGeminiIcon size={size} uniProps={brandMapping} />;
+    }
+    const Icon = THEMED_ICONS[glyph.id];
+    return <Icon size={size} uniProps={mapping} />;
+  }
+  return <ThemedDefaultIcon size={size} uniProps={mapping} />;
 }

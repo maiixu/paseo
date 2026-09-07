@@ -75,7 +75,12 @@ export function AgentProfileRow({
     <View style={rowStyle} testID={`agent-profile-row-${profile.id}`}>
       <View style={styles.rowMain}>
         <View style={styles.iconWrapper}>
-          <AgentProfileGlyph icon={profile.icon} color={profile.color} size={ICON_SIZE.md} />
+          <AgentProfileGlyph
+            icon={profile.icon}
+            color={profile.color}
+            provider={profile.provider}
+            size={ICON_SIZE.md}
+          />
         </View>
         <View style={settingsStyles.rowContent}>
           <View style={styles.titleLine}>

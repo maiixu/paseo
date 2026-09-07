@@ -1,3 +1,5 @@
+import { generateDraftId } from "@/stores/draft-keys";
+import { DEFAULT_LAUNCH_SERVER_ID } from "@/create-agent-preferences/launch-defaults";
 import { router, usePathname } from "expo-router";
 import {
   CalendarClock,
@@ -516,7 +518,7 @@ const SidebarNewWorkspaceHeaderRow = memo(function SidebarNewWorkspaceHeaderRow(
   const handlePress = useCallback(() => {
     onBeforeNavigate?.();
     router.push(
-      activeWorkspaceServerId
+      !DEFAULT_LAUNCH_SERVER_ID && activeWorkspaceServerId
         ? buildNewWorkspaceRoute(
             activeWorkspace && canUseActiveWorkspaceContext
               ? {
@@ -526,7 +528,9 @@ const SidebarNewWorkspaceHeaderRow = memo(function SidebarNewWorkspaceHeaderRow(
                 }
               : { serverId: activeWorkspaceServerId },
           )
-        : buildNewWorkspaceRoute(),
+        : buildNewWorkspaceRoute({
+            draftId: DEFAULT_LAUNCH_SERVER_ID ? generateDraftId() : undefined,
+          }),
     );
   }, [activeWorkspace, activeWorkspaceServerId, canUseActiveWorkspaceContext, onBeforeNavigate]);
 

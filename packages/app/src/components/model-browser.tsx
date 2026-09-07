@@ -36,7 +36,7 @@ import type { SheetHeader } from "@/components/adaptive-modal-sheet";
 import { Button } from "@/components/ui/button";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { getProviderIcon } from "@/components/provider-icons";
+import { getThemedProviderIcon } from "@/components/provider-icons";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { isNative, isWeb } from "@/constants/platform";
 import {
@@ -134,6 +134,8 @@ const foregroundMutedMapping = (theme: Theme) => ({
   color: theme.colors.foregroundMuted,
 });
 
+const foregroundMapping = (theme: Theme) => ({ color: theme.colors.foreground });
+
 const foregroundExtraMutedMapping = (theme: Theme) => ({
   color: theme.colors.foregroundExtraMuted,
 });
@@ -210,16 +212,19 @@ type ProviderGlyphTone = "muted" | "foreground";
 export function ModelProviderGlyph({
   provider,
   size,
-  tone = "muted",
+  tone = "foreground",
 }: {
   provider: string;
   size: number;
   tone?: ProviderGlyphTone;
 }) {
-  const Icon = getProviderIcon(provider);
-  const color =
-    tone === "foreground" ? styles.providerIconForeground.color : styles.providerIconMuted.color;
-  return <Icon size={size} color={color} />;
+  const Icon = getThemedProviderIcon(provider);
+  return (
+    <Icon
+      size={size}
+      uniProps={tone === "foreground" ? foregroundMapping : foregroundMutedMapping}
+    />
+  );
 }
 
 function HeaderSettingsIcon({ disabled }: { disabled: boolean }) {
@@ -728,7 +733,12 @@ function ModelRow({
           label={t("modelSelector.editProfileLabel", { name: primary.name })}
           testID={`model-edit-profile-${row.provider}-${row.modelId}`}
         >
-          <AgentProfileGlyph icon={primary.icon} color={primary.color} size={ICON_SIZE.xs} />
+          <AgentProfileGlyph
+            icon={primary.icon}
+            color={primary.color}
+            provider={primary.provider}
+            size={ICON_SIZE.xs}
+          />
         </ModelRowProfileAction>
       );
     }
@@ -742,7 +752,12 @@ function ModelRow({
         label={t("modelSelector.editProfilesCount", { count: profiledRows.length })}
         testID={`model-edit-profiles-${row.provider}-${row.modelId}`}
       >
-        <AgentProfileGlyph icon={primary.icon} color={primary.color} size={ICON_SIZE.xs} />
+        <AgentProfileGlyph
+          icon={primary.icon}
+          color={primary.color}
+          provider={primary.provider}
+          size={ICON_SIZE.xs}
+        />
       </ModelRowProfileAction>
     );
   }, [
@@ -853,8 +868,15 @@ function AgentProfilePickerRowView({
 }) {
   const handlePress = useCallback(() => onApply(row.id), [onApply, row.id]);
   const leadingSlot = useMemo(
-    () => <AgentProfileGlyph icon={row.icon} color={row.color} size={ICON_SIZE.sm} />,
-    [row.color, row.icon],
+    () => (
+      <AgentProfileGlyph
+        icon={row.icon}
+        color={row.color}
+        provider={row.provider}
+        size={ICON_SIZE.sm}
+      />
+    ),
+    [row.color, row.icon, row.provider],
   );
   return (
     <ModelBrowserRow
@@ -1670,11 +1692,5 @@ const styles = StyleSheet.create((theme) => ({
   },
   virtualizedProviderListContent: {
     paddingTop: 0,
-  },
-  providerIconMuted: {
-    color: theme.colors.foregroundMuted,
-  },
-  providerIconForeground: {
-    color: theme.colors.foreground,
   },
 }));

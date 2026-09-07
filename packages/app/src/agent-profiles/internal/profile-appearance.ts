@@ -67,6 +67,26 @@ export function resolveAgentProfileIconKey(value: string | undefined): AgentProf
   return isAgentProfileIconKey(value) ? value : null;
 }
 
+export type AgentProfileGlyphName =
+  | { kind: "custom"; id: AgentProfileIconKey }
+  | { kind: "provider"; id: string }
+  | { kind: "default" };
+
+/** Explicit choices retain their meaning; only an unassigned icon inherits the provider. */
+export function resolveAgentProfileGlyphName(
+  icon: string | undefined,
+  provider: string | undefined,
+): AgentProfileGlyphName {
+  const custom = resolveAgentProfileIconKey(icon);
+  if (custom) {
+    return { kind: "custom", id: custom };
+  }
+  if (!icon && provider) {
+    return { kind: "provider", id: provider };
+  }
+  return { kind: "default" };
+}
+
 export function resolveAgentProfileColor(value: string | undefined): AgentProfileColor {
   return isAgentProfileColor(value) ? value : "none";
 }

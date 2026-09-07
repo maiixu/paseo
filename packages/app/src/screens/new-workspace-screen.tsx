@@ -65,6 +65,11 @@ import {
 import { useKeyboardShiftStyle } from "@/hooks/use-keyboard-shift-style";
 import { useKeyboardActionHandler } from "@/hooks/use-keyboard-action-handler";
 import type { KeyboardActionId } from "@/keyboard/keyboard-action-dispatcher";
+import { draftLaunchSelections } from "@/create-agent-preferences/draft-launch-selection";
+import {
+  DEFAULT_LAUNCH_PROFILE_ID,
+  DEFAULT_LAUNCH_SERVER_ID,
+} from "@/create-agent-preferences/launch-defaults";
 import { useFormPreferences } from "@/hooks/use-form-preferences";
 import { useShortcutKeys } from "@/hooks/use-shortcut-keys";
 import type { CreateAgentInitialValues } from "@/hooks/use-agent-form-state";
@@ -924,6 +929,10 @@ async function runCreateChatAgent(input: CreateChatAgentInput): Promise<void> {
   if (!composerState) {
     throw new Error(input.labels.composerStateRequired);
   }
+  if (DEFAULT_LAUNCH_PROFILE_ID) {
+    if (composerState.modelError) throw new Error(composerState.modelError);
+    if (composerState.isModelLoading) throw new Error(input.labels.selectModel);
+  }
   const provider = composerState.selectedProvider;
   if (!provider) {
     throw new Error(input.labels.selectModel);
@@ -968,11 +977,13 @@ function buildComposerConfig(input: {
   workspaceDirectory: string | null;
   sourceDirectory: string | null;
   initialSetup?: WorkspaceDraftTabSetup | null;
+  draftId?: string;
 }): Parameters<typeof useAgentInputDraft>[0]["composer"] {
   const { serverId, isConnected, workspaceDirectory, sourceDirectory, initialSetup } = input;
   const workingDir = workspaceDirectory || sourceDirectory || undefined;
   return {
     initialServerId: serverId || null,
+    launchDraftId: input.draftId,
     initialValues: buildComposerInitialValues({ workingDir, initialSetup }),
     initialFeatureValues: initialSetup?.featureValues,
     isVisible: true,
@@ -1100,6 +1111,7 @@ function useNewWorkspaceHostSelector(input: {
       resolveNewWorkspaceInitialServerId({
         allServerIds: input.allServerIds,
         routeServerId: input.initialServerId,
+        defaultServerId: DEFAULT_LAUNCH_SERVER_ID,
         lastActiveProject: input.lastActiveProject,
         projects: input.projects,
         hostConnectionStatusByServerId: input.hostConnectionStatusByServerId,
@@ -1131,6 +1143,7 @@ function useNewWorkspaceHostSelector(input: {
           ? resolveNewWorkspaceAutomaticServerId({
               allServerIds: input.allServerIds,
               routeServerId: input.initialServerId,
+              defaultServerId: DEFAULT_LAUNCH_SERVER_ID,
               lastActiveProject: input.lastActiveProject,
               projects: input.projects,
               hostConnectionStatusByServerId: input.hostConnectionStatusByServerId,
@@ -1211,7 +1224,9 @@ function useNewWorkspaceInitialContext({
   sourceDirectory: sourceDirectoryProp,
   projectId,
   displayName: displayNameProp,
+  draftId,
 }: NewWorkspaceScreenProps): NewWorkspaceInitialContextState {
+  const [initialDraftServerId] = useState(() => restoredLaunchHost(serverId, draftId));
   const allHosts = useHosts();
   const allServerIds = useMemo(() => allHosts.map((h) => h.serverId), [allHosts]);
   const projects = useHostProjects(allServerIds);
@@ -1262,7 +1277,7 @@ function useNewWorkspaceInitialContext({
     handleHostPickerOpenChange,
     openHostPicker,
   } = useNewWorkspaceHostSelector({
-    initialServerId: serverId,
+    initialServerId: initialDraftServerId,
     allServerIds,
     projects,
     lastActiveProject,
@@ -1568,6 +1583,7 @@ export function NewWorkspaceScreen({
     sourceDirectory: sourceDirectoryProp,
     projectId,
     displayName: displayNameProp,
+    draftId,
   });
   // COMPAT(workspaceMultiplicity): added in v0.1.97, drop the gate when floor >= v0.1.97
   const supportsWorkspaceMultiplicity = useHostFeature(selectedServerId, "workspaceMultiplicity");
@@ -1673,6 +1689,7 @@ export function NewWorkspaceScreen({
       workspaceDirectory: workspace?.workspaceDirectory ?? null,
       sourceDirectory: selectedSourceDirectory,
       initialSetup: forkDraftSetup?.setup,
+      draftId,
     }),
   });
   const composerState = chatDraft.composerState;
@@ -2337,7 +2354,11 @@ export function NewWorkspaceScreen({
               agentControls={agentControlsWithDisabled}
             />
           )}
-          {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
+          <NewWorkspaceError
+            errorMessage={errorMessage}
+            isTerminalLaunch={isTerminalLaunch}
+            composerState={composerState}
+          />
         </ReanimatedAnimated.View>
       </View>
     </FileDropZone>
@@ -2485,3 +2506,23 @@ const styles = StyleSheet.create((theme) => ({
     borderRadius: 4,
   },
 }));
+
+function NewWorkspaceError({
+  errorMessage,
+  isTerminalLaunch,
+  composerState,
+}: {
+  errorMessage: string | null;
+  isTerminalLaunch: boolean;
+  composerState: { modelError: string | null } | null;
+}) {
+  const message =
+    errorMessage ||
+    (DEFAULT_LAUNCH_PROFILE_ID && !isTerminalLaunch ? composerState?.modelError : null);
+  return message ? <Text style={styles.errorText}>{message}</Text> : null;
+}
+
+function restoredLaunchHost(serverId: string, draftId: string | undefined): string {
+  if (serverId || !DEFAULT_LAUNCH_PROFILE_ID) return serverId;
+  return draftLaunchSelections.read(draftId)?.serverId ?? serverId;
+}

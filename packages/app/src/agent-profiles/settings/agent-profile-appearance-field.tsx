@@ -54,11 +54,13 @@ function colorLabel(t: TFunction, color: AgentProfileColor): string {
 
 function IconCell({
   iconKey,
+  provider,
   selected,
   color,
   onSelect,
 }: {
   iconKey: AgentProfileIconKey | null;
+  provider?: string | undefined;
   selected: boolean;
   color: AgentProfileColor;
   onSelect: (iconKey: AgentProfileIconKey | null) => void;
@@ -85,6 +87,7 @@ function IconCell({
     >
       <AgentProfileGlyph
         {...(iconKey ? { icon: iconKey } : {})}
+        provider={provider}
         color={color}
         size={ICON_SIZE.lg}
       />
@@ -143,6 +146,7 @@ export function AgentProfileAppearanceField({
   label,
   icon,
   color,
+  provider,
   onChange,
   size = "md",
   disabled = false,
@@ -152,6 +156,7 @@ export function AgentProfileAppearanceField({
   label: string;
   icon: string;
   color: string;
+  provider?: string | undefined;
   onChange: (next: { icon: string; color: string }) => void;
   size?: FieldControlSize;
   disabled?: boolean;
@@ -217,7 +222,8 @@ export function AgentProfileAppearanceField({
           testID={triggerTestID}
         >
           <AgentProfileGlyph
-            {...(selectedIcon ? { icon: selectedIcon } : {})}
+            icon={icon}
+            provider={provider}
             color={selectedColor}
             size={ICON_SIZE.md}
           />
@@ -249,6 +255,7 @@ export function AgentProfileAppearanceField({
           <View style={styles.grid}>
             <IconCell
               iconKey={null}
+              provider={provider}
               selected={selectedIcon === null}
               color={selectedColor}
               onSelect={handleIconSelect}

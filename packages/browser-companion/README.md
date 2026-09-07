@@ -24,6 +24,19 @@ Finish the two-host acceptance journey before switching the live `6767` origin. 
 
 Use Node 22 for this checkout. Build in the worktree, then copy the accepted artifacts into `~/.local/share/paseo/browser-feedback`. Never serve a worktree build directory: rebuilds can delete it, and worktree cleanup would remove the installed UI. The [daemon Web build](../../scripts/build-daemon-web-ui.mjs) also deletes its output directory before copying assets.
 
+### New-agent defaults
+
+The personal Web build pins global new-agent creation to cloudtop and the `codex-astra-medium` profile. Set these public build variables in the shell before building:
+
+```bash
+export EXPO_PUBLIC_PASEO_DEFAULT_SERVER_ID="$(ssh cloudtop 'cat ~/.paseo/server-id')"
+export EXPO_PUBLIC_PASEO_DEFAULT_PROFILE_ID=codex-astra-medium
+```
+
+Keep these variables in later builds. The host ID identifies the saved connection; it is not a credential. Profile values come from that host's existing daemon configuration. Both hosts must carry the named profile. Profile ordering is separate from default selection and lives in each host's `daemon.agentProfiles`.
+
+Global **New workspace** uses the configured host. Explicit host/project creation and restored draft selections retain their context. A one-off model choice does not replace the next new agent's default. Existing agents retain their configuration. Builds without these variables keep the upstream selection behavior.
+
 ### Stage the files
 
 Run these commands from the accepted feature worktree, after the build commands above. Keep the variables in the same shell for the subsequent steps. This creates private snapshots and stable installation directories; it does not change the running daemon.
