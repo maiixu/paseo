@@ -1,3 +1,4 @@
+import { AgentAttentionRequiredMessageSchema, AgentStreamEventPayloadSchema } from "./messages.js";
 import { describe, expect, it } from "vitest";
 import {
   buildAgentAttentionNotificationPayload,
@@ -116,4 +117,44 @@ describe("findLatestPermissionRequest", () => {
 
     expect(findLatestPermissionRequest(pending)?.id).toBe("second");
   });
+});
+
+it("preserves question identity through both notification transports and accepts legacy events", () => {
+  const notification = buildAgentAttentionNotificationPayload({
+    reason: "permission",
+    serverId: "host",
+    workspaceId: "workspace",
+    agentId: "agent",
+    permissionRequest: {
+      id: "question-1",
+      provider: "codex",
+      name: "request_user_input_async",
+      kind: "question",
+    },
+  });
+  expect(notification.data.requestId).toBe("question-1");
+  const payload = {
+    agentId: "agent",
+    reason: "permission",
+    timestamp: "2026-09-12T00:00:00Z",
+    shouldNotify: true,
+    notification,
+  };
+  expect(
+    AgentAttentionRequiredMessageSchema.parse({ type: "agent_attention_required", payload }).payload
+      .notification?.data.requestId,
+  ).toBe("question-1");
+  const stream = AgentStreamEventPayloadSchema.parse({
+    type: "attention_required",
+    provider: "codex",
+    ...payload,
+  });
+  expect(stream.type).toBe("attention_required");
+  if (stream.type !== "attention_required") throw Error("Unexpected stream type");
+  expect(stream.notification?.data.requestId).toBe("question-1");
+  delete notification.data.requestId;
+  expect(
+    AgentAttentionRequiredMessageSchema.parse({ type: "agent_attention_required", payload }).payload
+      .notification?.data.requestId,
+  ).toBeUndefined();
 });

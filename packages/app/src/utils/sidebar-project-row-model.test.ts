@@ -65,6 +65,53 @@ function project(overrides: ProjectOverrides = {}): SidebarProjectEntry {
 }
 
 describe("buildSidebarProjectRowModel", () => {
+  it("prefers the configured launch host and keeps its project placement", () => {
+    const result = buildSidebarProjectRowModel({
+      project: project({
+        hosts: [
+          { serverId: "mac", iconWorkingDir: "/mac/repo", worktreeSupport: "supported" },
+          { serverId: "cloud", iconWorkingDir: "/cloud/repo", worktreeSupport: "supported" },
+        ],
+      }),
+      collapsed: false,
+      defaultServerId: "cloud",
+    });
+    expect(result.trailingAction).toEqual({
+      kind: "new_workspace",
+      target: { serverId: "cloud", projectId: "project-cloud", iconWorkingDir: "/cloud/repo" },
+    });
+  });
+
+  it.each([
+    {
+      defaultServerId: "missing",
+      worktreeSupport: "supported" as const,
+      iconWorkingDir: "/cloud/repo",
+    },
+    {
+      defaultServerId: "cloud",
+      worktreeSupport: "unsupported" as const,
+      iconWorkingDir: "/cloud/repo",
+    },
+    { defaultServerId: "cloud", worktreeSupport: "supported" as const, iconWorkingDir: " " },
+    { defaultServerId: null, worktreeSupport: "supported" as const, iconWorkingDir: "/cloud/repo" },
+  ])("falls back to the first eligible placement: %j", ({ defaultServerId, ...cloud }) => {
+    const result = buildSidebarProjectRowModel({
+      project: project({
+        hosts: [
+          { serverId: "mac", iconWorkingDir: "/mac/repo", worktreeSupport: "supported" },
+          { serverId: "cloud", ...cloud },
+        ],
+      }),
+      collapsed: false,
+      defaultServerId,
+    });
+    expect(result.trailingAction).toEqual({
+      kind: "new_workspace",
+      target: { serverId: "mac", projectId: "project-mac", iconWorkingDir: "/mac/repo" },
+    });
+  });
+
   it("renders a non-git single-workspace project as an expandable section", () => {
     const result = buildSidebarProjectRowModel({
       project: project({

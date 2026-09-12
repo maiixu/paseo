@@ -44,6 +44,7 @@ export const AGENT_PROFILE_ICON_KEYS = [
   "brain",
   "sparkles",
   "shield",
+  "gemini",
 ] as const;
 
 export type AgentProfileIconKey = (typeof AGENT_PROFILE_ICON_KEYS)[number];
@@ -64,6 +65,26 @@ export function isAgentProfileColor(value: string | undefined): value is AgentPr
 /** Anything unrecognised means "not chosen": the glyph and colour both default. */
 export function resolveAgentProfileIconKey(value: string | undefined): AgentProfileIconKey | null {
   return isAgentProfileIconKey(value) ? value : null;
+}
+
+export type AgentProfileGlyphName =
+  | { kind: "custom"; id: AgentProfileIconKey }
+  | { kind: "provider"; id: string }
+  | { kind: "default" };
+
+/** Explicit choices retain their meaning; only an unassigned icon inherits the provider. */
+export function resolveAgentProfileGlyphName(
+  icon: string | undefined,
+  provider: string | undefined,
+): AgentProfileGlyphName {
+  const custom = resolveAgentProfileIconKey(icon);
+  if (custom) {
+    return { kind: "custom", id: custom };
+  }
+  if (!icon && provider) {
+    return { kind: "provider", id: provider };
+  }
+  return { kind: "default" };
 }
 
 export function resolveAgentProfileColor(value: string | undefined): AgentProfileColor {

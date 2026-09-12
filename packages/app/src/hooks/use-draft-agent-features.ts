@@ -23,6 +23,7 @@ export function useDraftAgentFeatures(input: {
   modelId: string | null | undefined;
   thinkingOptionId: string | null | undefined;
   initialFeatureValues?: Record<string, unknown>;
+  defaultFeatureValues?: Record<string, unknown>;
 }) {
   const { t } = useTranslation();
   const { serverId, provider, cwd, modeId, modelId, thinkingOptionId, initialFeatureValues } =
@@ -37,8 +38,10 @@ export function useDraftAgentFeatures(input: {
   const normalizedProvider = provider ?? null;
   const previousProviderRef = useRef<AgentProvider | null>(normalizedProvider);
   const persistedFeatureValues = useMemo(
-    () => (provider ? (preferences.providerPreferences?.[provider]?.featureValues ?? {}) : {}),
-    [preferences.providerPreferences, provider],
+    () =>
+      input.defaultFeatureValues ??
+      (provider ? (preferences.providerPreferences?.[provider]?.featureValues ?? {}) : {}),
+    [input.defaultFeatureValues, preferences.providerPreferences, provider],
   );
 
   const draftConfig = useMemo<DraftFeatureConfig | null>(() => {
@@ -80,6 +83,10 @@ export function useDraftAgentFeatures(input: {
   });
   const availableFeaturesRaw = featuresQuery.data;
   const availableFeatures = useMemo(() => availableFeaturesRaw ?? [], [availableFeaturesRaw]);
+  const selectionFeatureValues = useMemo(
+    () => ({ ...persistedFeatureValues, ...localFeatureValues }),
+    [persistedFeatureValues, localFeatureValues],
+  );
   const featureValues = useMemo(
     () =>
       resolveFeatureValues({
@@ -152,6 +159,7 @@ export function useDraftAgentFeatures(input: {
   return {
     features,
     featureValues: effectiveFeatureValues,
+    selectionFeatureValues,
     isLoading: featuresQuery.isLoading,
     setFeatureValue,
     applyProfileFeatureValues,

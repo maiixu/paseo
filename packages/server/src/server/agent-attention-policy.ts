@@ -3,6 +3,7 @@ import type { AgentAttentionReason } from "@getpaseo/protocol/agent-attention-no
 export const PRESENCE_THRESHOLD_MS = 180_000;
 
 export interface ClientPresenceState {
+  deviceType?: "web" | "mobile";
   appVisible: boolean;
   lastActivityAtMs: number | null;
   focusedAgentId: string | null;
@@ -24,6 +25,8 @@ interface ComputeNotificationPlanInput {
   // Whether a push notification is allowed when no client is present.
   pushEligible: boolean;
   nowMs: number;
+  // Questions still need a browser alert when an open page has no recent input.
+  allowStaleWebRecipient?: boolean;
 }
 
 function isFocusedOnTarget(
@@ -44,7 +47,10 @@ export function computeNotificationPlan({
   focusTarget,
   pushEligible,
   nowMs,
+  allowStaleWebRecipient = false,
 }: ComputeNotificationPlanInput): NotificationPlan {
+  let staleWebIndex: number | null = null;
+  let staleWebAtMs = Number.NEGATIVE_INFINITY;
   let mostRecentPresentIndex: number | null = null;
   let mostRecentPresentAtMs = Number.NEGATIVE_INFINITY;
 
@@ -55,6 +61,15 @@ export function computeNotificationPlan({
       clampedActivityAtMs !== null && nowMs - clampedActivityAtMs <= PRESENCE_THRESHOLD_MS;
 
     if (!isPresent) {
+      if (
+        allowStaleWebRecipient &&
+        state.deviceType === "web" &&
+        clampedActivityAtMs !== null &&
+        clampedActivityAtMs > staleWebAtMs
+      ) {
+        staleWebIndex = clientIndex;
+        staleWebAtMs = clampedActivityAtMs;
+      }
       continue;
     }
 
@@ -72,6 +87,9 @@ export function computeNotificationPlan({
     return { inAppRecipientIndex: mostRecentPresentIndex, shouldPush: false };
   }
 
+  if (staleWebIndex !== null) {
+    return { inAppRecipientIndex: staleWebIndex, shouldPush: false };
+  }
   return { inAppRecipientIndex: null, shouldPush: pushEligible };
 }
 

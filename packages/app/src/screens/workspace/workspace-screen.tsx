@@ -484,24 +484,20 @@ function ResolvedMobileActiveTabTrigger({
   );
 }
 
-function WorkspaceDocumentTitleEffect({
-  label,
-  titleState,
-}: {
-  label: string;
-  titleState: "ready" | "loading";
-}) {
-  const { t } = useTranslation();
+function resolveWorkspaceDocumentTitle(input: {
+  workspaceName: string | null;
+  agentTitle: string | null;
+}): string {
+  return input.workspaceName?.trim() || input.agentTitle?.trim() || "Paseo";
+}
+
+function WorkspaceDocumentTitleEffect({ title }: { title: string }) {
   useEffect(() => {
     if (isNative || typeof document === "undefined") {
       return;
     }
-    const resolvedLabel = label.trim();
-    document.title =
-      titleState === "loading"
-        ? t("workspace.tabs.loading")
-        : resolvedLabel || t("workspace.tabs.fallback.workspace");
-  }, [label, titleState, t]);
+    document.title = title;
+  }, [title]);
 
   return null;
 }
@@ -1356,23 +1352,36 @@ function WorkspaceDocumentTitleEffectSlot({
   tab,
   serverId,
   workspaceId,
+  workspace,
   isRouteFocused,
 }: {
   tab: WorkspaceTabDescriptor | null;
   serverId: string;
   workspaceId: string;
+  workspace: WorkspaceDescriptor | null;
   isRouteFocused: boolean;
 }) {
-  if (!isRouteFocused || !isWeb || !tab) {
+  if (!isRouteFocused || !isWeb) {
     return null;
+  }
+
+  const workspaceName = workspace?.name ?? null;
+  if (workspaceName?.trim() || tab?.target.kind !== "agent") {
+    return (
+      <WorkspaceDocumentTitleEffect
+        title={resolveWorkspaceDocumentTitle({ workspaceName, agentTitle: null })}
+      />
+    );
   }
 
   return (
     <WorkspaceTabPresentationResolver tab={tab} serverId={serverId} workspaceId={workspaceId}>
       {(presentation) => (
         <WorkspaceDocumentTitleEffect
-          label={presentation.label}
-          titleState={presentation.titleState}
+          title={resolveWorkspaceDocumentTitle({
+            workspaceName,
+            agentTitle: presentation.titleState === "ready" ? presentation.label : null,
+          })}
         />
       )}
     </WorkspaceTabPresentationResolver>
@@ -3493,12 +3502,6 @@ function WorkspaceScreenContent({
     () => !isMobile && !canRenderDesktopPaneSplits,
     [isMobile, canRenderDesktopPaneSplits],
   );
-  useEffect(() => {
-    if (!isRouteFocused || isNative || typeof document === "undefined" || activeTabDescriptor) {
-      return;
-    }
-    document.title = "Workspace";
-  }, [activeTabDescriptor, isRouteFocused]);
   const buildPaneContentModel = useCallback(
     (input: {
       tab: WorkspaceTabDescriptor;
@@ -4101,6 +4104,7 @@ function WorkspaceScreenContent({
           tab={activeTabDescriptor}
           serverId={normalizedServerId}
           workspaceId={normalizedWorkspaceId}
+          workspace={workspaceDescriptor}
           isRouteFocused={isRouteFocused}
         />
         <View style={styles.threePaneRow}>

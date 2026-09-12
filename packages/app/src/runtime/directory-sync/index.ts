@@ -31,6 +31,7 @@ import {
   type DirectoryTransaction,
 } from "./transaction";
 import { workspaceLabels } from "@/workspace-labels";
+import { OptionalCacheReader } from "@/runtime/optional-cache-reader";
 import type {
   CachedDirectory,
   CachedWorkspace,
@@ -150,12 +151,13 @@ export class DirectorySync {
   private readonly abortSessionWaits = new Set<() => void>();
   private cacheLoad: Promise<void> | null = null;
   private cacheAccepted = false;
+  private readonly cacheReader = new OptionalCacheReader();
   private revision = 0;
   private workspaceRevision = 0;
   private readonly routeDemandIds = new Set<string>();
   private readonly fullDemandSources = new Set<object>();
   private demandRefresh: Promise<void> | null = null;
-  private satisfiedDemandSource: DirectorySourceToken | null = null;
+  private satisfiedDemandSource: (DirectorySourceToken & { scope: "route" | "full" }) | null = null;
   private cursors: DirectoryCheckpoint = {};
 
   constructor(
@@ -175,6 +177,7 @@ export class DirectorySync {
   }
 
   connectionChanged(connection: DirectoryConnection): boolean {
+    this.cacheReader.setOnline(connection.status === "online");
     const changed =
       this.connection.client !== connection.client ||
       this.connection.source.clientGeneration !== connection.source.clientGeneration ||
@@ -288,6 +291,7 @@ export class DirectorySync {
   }
 
   dispose(): void {
+    this.cacheReader.setOnline(false);
     this.flushAbortedTransactions();
     this.abortPendingSessionWaits();
     this.unsubscribe?.();
@@ -308,15 +312,17 @@ export class DirectorySync {
       return this.fullDemandSources.size > 0 ? this.loadCachedDirectory() : Promise.resolve();
     }
     const source = this.connection.source;
+    const scope = this.fullDemandSources.size > 0 ? "full" : "route";
     if (
       !force &&
       this.satisfiedDemandSource?.clientGeneration === source.clientGeneration &&
-      this.satisfiedDemandSource.connectionEpoch === source.connectionEpoch
+      this.satisfiedDemandSource.connectionEpoch === source.connectionEpoch &&
+      (scope === "route" || this.satisfiedDemandSource.scope === "full")
     ) {
       return Promise.resolve();
     }
     const refresh =
-      this.fullDemandSources.size > 0
+      scope === "full"
         ? this.refreshAll()
         : Promise.all([
             this.refreshAgentsInternal({ subscribe: {} }, false),
@@ -324,7 +330,7 @@ export class DirectorySync {
           ]).then(() => undefined);
     this.demandRefresh = refresh
       .then(() => {
-        this.satisfiedDemandSource = source;
+        this.satisfiedDemandSource = { ...source, scope };
         return undefined;
       })
       .finally(() => {
@@ -336,6 +342,10 @@ export class DirectorySync {
             current.connectionEpoch !== source.connectionEpoch)
         ) {
           void this.requestDemandRefresh().catch(() => undefined);
+        } else if (scope === "route" && this.fullDemandSources.size > 0) {
+          // A sidebar can mount while route hydration is in flight. Complete its
+          // stronger demand, including catalogs, before callers consider it ready.
+          return this.requestDemandRefresh();
         }
       });
     return this.demandRefresh;
@@ -349,7 +359,8 @@ export class DirectorySync {
     if (!this.checkpoints) return;
     if (useSessionStore.getState().sessions[this.serverId]?.agents.has(agentId)) return;
     const token = this.agents.captureCache(agentId);
-    const agent = await this.checkpoints.readAgent(this.serverId, agentId);
+    const checkpoints = this.checkpoints;
+    const agent = await this.readOptionalCache(() => checkpoints.readAgent(this.serverId, agentId));
     if (!agent) return;
     const session = useSessionStore.getState().sessions[this.serverId];
     if (!session || session.agents.has(agentId)) return;
@@ -370,7 +381,10 @@ export class DirectorySync {
     if (!this.checkpoints) return;
     if (useSessionStore.getState().sessions[this.serverId]?.workspaces.has(workspaceId)) return;
     const revision = this.workspaceRevision;
-    const cached = await this.checkpoints.readWorkspace(this.serverId, workspaceId);
+    const checkpoints = this.checkpoints;
+    const cached = await this.readOptionalCache(() =>
+      checkpoints.readWorkspace(this.serverId, workspaceId),
+    );
     if (!cached) return;
     if (this.workspaceRevision !== revision) return;
     const session = useSessionStore.getState().sessions[this.serverId];
@@ -383,8 +397,8 @@ export class DirectorySync {
     if (!checkpoints) return Promise.resolve();
     this.cacheLoad ??= (async () => {
       const revision = this.revision;
-      const cached = await checkpoints.readDirectory(this.serverId);
-      if (this.cacheAccepted) return;
+      const cached = await this.readOptionalCache(() => checkpoints.readDirectory(this.serverId));
+      if (!cached || this.cacheAccepted) return;
       if (!useSessionStore.getState().sessions[this.serverId]) return;
       this.agents.commitCached(cached.agents);
       this.workspaces.commitCached(cached);
@@ -407,6 +421,10 @@ export class DirectorySync {
 
   acceptAgent(agent: Agent): Agent {
     return this.agents.accept(agent);
+  }
+
+  readOptionalCache<T>(read: () => Promise<T>): Promise<T | undefined> {
+    return this.cacheReader.read(read);
   }
 
   async fetchTimeline(

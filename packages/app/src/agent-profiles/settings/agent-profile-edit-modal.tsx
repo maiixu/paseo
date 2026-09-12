@@ -230,6 +230,7 @@ function OpenAgentProfileEditModal({
               label={t("settings.host.agentProfiles.iconLabel")}
               icon={state.icon}
               color={state.color}
+              provider={state.provider}
               onChange={handleAppearanceChange}
               disabled={state.isSubmitting}
               size={controlSize}

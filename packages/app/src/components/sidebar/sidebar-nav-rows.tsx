@@ -1,3 +1,5 @@
+import { generateDraftId } from "@/stores/draft-keys";
+import { DEFAULT_LAUNCH_SERVER_ID } from "@/create-agent-preferences/launch-defaults";
 import { router, usePathname } from "expo-router";
 import { CalendarClock, History, Plus, Search } from "lucide-react-native";
 import { memo, useCallback, useMemo, type ComponentType } from "react";
@@ -83,7 +85,7 @@ const SidebarNewWorkspaceRow = memo(function SidebarNewWorkspaceRow({
   const handlePress = useCallback(() => {
     onBeforeNavigate?.();
     router.push(
-      activeWorkspaceServerId
+      !DEFAULT_LAUNCH_SERVER_ID && activeWorkspaceServerId
         ? buildNewWorkspaceRoute(
             activeWorkspace && canUseActiveWorkspaceContext
               ? {
@@ -93,7 +95,9 @@ const SidebarNewWorkspaceRow = memo(function SidebarNewWorkspaceRow({
                 }
               : { serverId: activeWorkspaceServerId },
           )
-        : buildNewWorkspaceRoute(),
+        : buildNewWorkspaceRoute({
+            draftId: DEFAULT_LAUNCH_SERVER_ID ? generateDraftId() : undefined,
+          }),
     );
   }, [activeWorkspace, activeWorkspaceServerId, canUseActiveWorkspaceContext, onBeforeNavigate]);
 

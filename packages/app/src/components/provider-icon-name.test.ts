@@ -11,13 +11,13 @@ describe("resolveProviderIconName", () => {
   it("returns the built-in identifier for known provider ids", () => {
     expect(resolveProviderIconName("kiro")).toEqual({ kind: "builtin", id: "kiro" });
     expect(resolveProviderIconName("claude")).toEqual({ kind: "builtin", id: "claude" });
+    expect(resolveProviderIconName("codex")).toEqual({ kind: "builtin", id: "codex" });
     expect(resolveProviderIconName("omp")).toEqual({ kind: "builtin", id: "omp" });
     expect(resolveProviderIconName("minimax")).toEqual({ kind: "builtin", id: "minimax" });
   });
 
   it("returns the catalog identifier for ACP catalog provider ids that ship an icon", () => {
     expect(resolveProviderIconName("amp-acp")).toEqual({ kind: "catalog", id: "amp-acp" });
-    expect(resolveProviderIconName("gemini")).toEqual({ kind: "catalog", id: "gemini" });
     expect(resolveProviderIconName("gjc")).toEqual({ kind: "catalog", id: "gjc" });
     expect(resolveProviderIconName("traecli")).toEqual({ kind: "catalog", id: "traecli" });
   });
@@ -66,6 +66,16 @@ describe("resolveProviderIconName", () => {
       kind: "svg",
       svg: secondSvg,
     });
+  });
+
+  it("uses the Gemini brand icon for Antigravity", () => {
+    expect(resolveProviderIconName("antigravity")).toEqual({ kind: "builtin", id: "gemini" });
+    expect(resolveProviderIconName("gemini")).toEqual({ kind: "builtin", id: "gemini" });
+  });
+
+  it("uses the AWS brand for Bedrock without changing other custom Claude providers", () => {
+    expect(resolveProviderIconName("claude-bedrock")).toEqual({ kind: "builtin", id: "aws" });
+    expect(resolveProviderIconName("custom-claude-profile")).toEqual({ kind: "bot" });
   });
 });
 

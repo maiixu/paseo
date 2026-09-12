@@ -1,9 +1,12 @@
 import { Bot, PackagePlus } from "lucide-react-native";
 import { createElement, type ComponentType } from "react";
 import { SvgXml } from "react-native-svg";
+import { withUnistyles } from "react-native-unistyles";
+import { AwsIcon } from "@/components/icons/aws-icon";
 import { ClaudeIcon } from "@/components/icons/claude-icon";
 import { CodexIcon } from "@/components/icons/codex-icon";
 import { CopilotIcon } from "@/components/icons/copilot-icon";
+import { GeminiIcon } from "@/components/icons/gemini-icon";
 import { MiniMaxIcon } from "@/components/icons/minimax-icon";
 import { OpenCodeIcon } from "@/components/icons/opencode-icon";
 import { OmpIcon } from "@/components/icons/omp-icon";
@@ -19,9 +22,11 @@ export interface ProviderIconProps {
 export type ProviderIconComponent = ComponentType<ProviderIconProps>;
 
 const BUILTIN_PROVIDER_ICONS: Record<string, ProviderIconComponent> = {
+  aws: AwsIcon,
   claude: ClaudeIcon as unknown as ProviderIconComponent,
   codex: CodexIcon as unknown as ProviderIconComponent,
   copilot: CopilotIcon as unknown as ProviderIconComponent,
+  gemini: GeminiIcon,
   kiro: PackagePlus,
   minimax: MiniMaxIcon as unknown as ProviderIconComponent,
   omp: OmpIcon as unknown as ProviderIconComponent,
@@ -82,4 +87,25 @@ export function getProviderIcon(provider: string, serverId?: string | null): Pro
     return getSnapshotProviderIcon(`${serverId}:${provider}`, name.svg);
   }
   return Bot;
+}
+
+function createThemedProviderIcon(Icon: ProviderIconComponent) {
+  return withUnistyles(Icon);
+}
+
+const themedProviderIcons = new Map<
+  ProviderIconComponent,
+  ReturnType<typeof createThemedProviderIcon>
+>();
+
+/** Theme subscriptions belong to the SVG leaf, including for catalog/custom providers. */
+export function getThemedProviderIcon(provider: string, serverId?: string | null) {
+  const Icon = getProviderIcon(provider, serverId);
+  const cached = themedProviderIcons.get(Icon);
+  if (cached) {
+    return cached;
+  }
+  const themed = createThemedProviderIcon(Icon);
+  themedProviderIcons.set(Icon, themed);
+  return themed;
 }

@@ -4246,7 +4246,7 @@ export class AgentManager {
         this.onStreamTurnStarted({ agent, eventTurnId, isForegroundEvent, flags });
         return undefined;
       case "permission_requested":
-        this.onStreamPermissionRequested(agent, event);
+        this.onStreamPermissionRequested(agent, event, options?.fromHistory === true);
         return undefined;
       case "permission_resolved":
         this.onStreamPermissionResolved({ agent, event, options, flags });
@@ -4471,11 +4471,14 @@ export class AgentManager {
   private onStreamPermissionRequested(
     agent: ActiveManagedAgent,
     event: Extract<AgentStreamEvent, { type: "permission_requested" }>,
+    fromHistory: boolean,
   ): void {
     const hadPendingPermissions = agent.pendingPermissions.size > 0;
+    const isNewQuestion =
+      event.request.kind === "question" && !agent.pendingPermissions.has(event.request.id);
     agent.pendingPermissions.set(event.request.id, event.request);
     this.refreshSessionPersistence(agent);
-    if (!hadPendingPermissions && !agent.internal) {
+    if (!fromHistory && !agent.internal && (!hadPendingPermissions || isNewQuestion)) {
       this.broadcastAgentAttention(agent, "permission");
     }
     this.emitState(agent);

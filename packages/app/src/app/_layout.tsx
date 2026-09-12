@@ -88,7 +88,8 @@ import { UpdateCalloutSource } from "@/desktop/updates/update-callout-source";
 import { useActiveWorktreeNewAction } from "@/hooks/use-active-worktree-new-action";
 import { useGlobalNewWorkspaceAction } from "@/hooks/use-global-new-workspace-action";
 import { useLatchedBoolean } from "@/hooks/use-latched-boolean";
-import { useFaviconStatus } from "@/hooks/use-favicon-status";
+import { FaviconStatus } from "@/hooks/use-favicon-status";
+import { BrowserFeedbackSync } from "@/browser-feedback/browser-feedback-sync";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { resolveExplorerSidebarPresentation } from "@/workspace-tabs/explorer-sidebar";
 import { KeyboardShiftProvider } from "@/hooks/use-keyboard-shift-style";
@@ -683,7 +684,8 @@ function ProvidersWrapper({ children }: { children: ReactNode }) {
         <DesktopWindowControlsSync />
         <OfferLinkListener upsertDaemonFromOfferUrl={upsertConnectionFromOfferUrl} />
         <HostSessionManager />
-        <FaviconStatusSync />
+        <FaviconStatus />
+        <BrowserFeedbackSync />
         {children}
       </VoiceProvider>
     </AppearanceProvider>
@@ -884,11 +886,6 @@ function AppWithSidebar({ children }: { children: ReactNode }) {
       routeHasKnownHost);
 
   return <AppContainer chromeEnabled={shouldShowAppChrome}>{children}</AppContainer>;
-}
-
-function FaviconStatusSync() {
-  useFaviconStatus();
-  return null;
 }
 
 const ROOT_STACK_SCREEN_OPTIONS = {

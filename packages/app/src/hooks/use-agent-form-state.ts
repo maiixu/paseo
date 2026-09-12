@@ -14,6 +14,12 @@ import {
 import { filterSelectableModels } from "@/provider-selection/model-catalog";
 import { OptimisticFormPreferences } from "@/create-agent-preferences/optimistic-preferences";
 import { applyAgentProfilePreferences } from "@/create-agent-preferences/preferences";
+import {
+  DEFAULT_LAUNCH_PROFILE_ID,
+  resolvePinnedLaunchProfile,
+  shouldUsePinnedLaunchProfile,
+} from "@/create-agent-preferences/launch-defaults";
+import { useDaemonConfig } from "./use-daemon-config";
 import { useProvidersSnapshot } from "./use-providers-snapshot";
 import {
   useFormPreferences,
@@ -71,6 +77,7 @@ export interface UseAgentFormStateResult {
   availableThinkingOptions: NonNullable<AgentModelDefinition["thinkingOptions"]>;
   isModelLoading: boolean;
   modelError: string | null;
+  defaultFeatureValues?: Record<string, unknown>;
   refreshProviderModels: (provider?: AgentProvider) => void;
   refetchProviderModelsIfStale: () => void;
   setProviderAndModelFromUser: (provider: AgentProvider, modelId: string) => void;
@@ -142,6 +149,47 @@ async function persistProviderPreferences(input: {
       },
     }),
   );
+}
+
+function usePinnedAgentFormDefaults(input: {
+  isCreateFlow: boolean;
+  isVisible: boolean;
+  initialValues: FormInitialValues | undefined;
+  userModified: { provider: boolean; model: boolean };
+  snapshotServerId: string | null;
+  snapshotEntries: ProviderSnapshotEntry[] | undefined;
+}) {
+  const { initialValues, snapshotEntries } = input;
+  const profileId = input.isCreateFlow ? DEFAULT_LAUNCH_PROFILE_ID : null;
+  const hasUserSelection = input.userModified.provider || input.userModified.model;
+  const needsPinnedProfile = shouldUsePinnedLaunchProfile({
+    profileId,
+    initialValues,
+    hasUserSelection,
+  });
+  const { config } = useDaemonConfig(
+    needsPinnedProfile && input.isVisible ? input.snapshotServerId : null,
+  );
+  const pinnedProfile = useMemo(
+    () =>
+      resolvePinnedLaunchProfile({
+        profileId,
+        initialValues,
+        hasUserSelection,
+        profiles: config ? (config.agentProfiles ?? []) : null,
+        entries: snapshotEntries,
+      }),
+    [profileId, hasUserSelection, initialValues, config, snapshotEntries],
+  );
+  return {
+    pinnedProfile,
+    isPinnedProfileBlocked:
+      pinnedProfile.status === "loading" || pinnedProfile.status === "unavailable",
+    defaultFeatureValues:
+      pinnedProfile.status === "ready" ? pinnedProfile.featureValues : undefined,
+    loading: pinnedProfile.status === "loading",
+    error: pinnedProfile.status === "unavailable" ? pinnedProfile.message : null,
+  };
 }
 
 export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFormStateResult {
@@ -246,8 +294,20 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
   const modelSelectorProviders = snapshotModelSelectorProviders;
   const availableModels = snapshotSelectedProviderModels;
   const modeOptions = snapshotSelectedProviderModes;
+  const pinned = usePinnedAgentFormDefaults({
+    isCreateFlow,
+    isVisible,
+    initialValues,
+    userModified,
+    snapshotServerId: serverId,
+    snapshotEntries,
+  });
+  const { pinnedProfile, isPinnedProfileBlocked, defaultFeatureValues } = pinned;
   const isModelSelectionLoading =
-    resolution.status === "pending" || snapshotIsLoading || selectedProviderIsLoading;
+    (resolution.status === "pending" && !pinned.error) ||
+    snapshotIsLoading ||
+    selectedProviderIsLoading ||
+    pinned.loading;
   const isAllModelsLoading = isModelSelectionLoading;
 
   useEffect(() => {
@@ -256,10 +316,10 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
       serverId,
       isVisible,
       isCreateFlow,
-      isPreferencesLoading,
+      isPreferencesLoading: isPreferencesLoading || isPinnedProfileBlocked,
       hasSnapshot: snapshotEntries !== undefined,
-      initialValues,
-      preferences,
+      initialValues: pinnedProfile.status === "ready" ? pinnedProfile.initialValues : initialValues,
+      preferences: pinnedProfile.status === "disabled" ? preferences : {},
       providerModelsByProvider: snapshotProviderModelsByProvider,
       allowedProviderMap: snapshotResolvableProviderDefinitionMap,
     });
@@ -273,6 +333,8 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
     preferences,
     snapshotProviderModelsByProvider,
     snapshotResolvableProviderDefinitionMap,
+    pinnedProfile,
+    isPinnedProfileBlocked,
   ]);
 
   const setProviderAndModelFromUser = useCallback(
@@ -494,7 +556,8 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
       isProviderModelsRefreshing: snapshotIsRefreshing,
       availableThinkingOptions,
       isModelLoading,
-      modelError,
+      modelError: pinned.error ?? modelError,
+      defaultFeatureValues,
       refreshProviderModels,
       refetchProviderModelsIfStale,
       setProviderAndModelFromUser,
@@ -526,6 +589,8 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
       availableThinkingOptions,
       isModelLoading,
       modelError,
+      pinned.error,
+      defaultFeatureValues,
       refreshProviderModels,
       refetchProviderModelsIfStale,
       setProviderAndModelFromUser,

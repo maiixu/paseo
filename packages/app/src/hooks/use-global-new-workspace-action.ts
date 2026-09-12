@@ -1,3 +1,5 @@
+import { generateDraftId } from "@/stores/draft-keys";
+import { DEFAULT_LAUNCH_SERVER_ID } from "@/create-agent-preferences/launch-defaults";
 import { useCallback } from "react";
 import { router } from "expo-router";
 import { useKeyboardActionHandler } from "@/hooks/use-keyboard-action-handler";
@@ -28,7 +30,7 @@ export function useGlobalNewWorkspaceAction() {
       return false;
     }
     router.navigate(
-      (serverId
+      (!DEFAULT_LAUNCH_SERVER_ID && serverId
         ? buildNewWorkspaceRoute(
             activeWorkspace && canUseActiveWorkspaceContext
               ? {
@@ -38,7 +40,9 @@ export function useGlobalNewWorkspaceAction() {
                 }
               : { serverId },
           )
-        : buildNewWorkspaceRoute()) as never,
+        : buildNewWorkspaceRoute({
+            draftId: DEFAULT_LAUNCH_SERVER_ID ? generateDraftId() : undefined,
+          })) as never,
     );
     return true;
   }, [activeWorkspace, canUseActiveWorkspaceContext, hosts.length, serverId]);

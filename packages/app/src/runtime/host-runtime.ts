@@ -30,7 +30,7 @@ import { ConnectionOfferSchema, type ConnectionOffer } from "@getpaseo/protocol/
 import { shouldUseDesktopDaemon } from "@/desktop/daemon/desktop-daemon";
 import { isWeb } from "@/constants/platform";
 import { connectToDaemon } from "@/utils/test-daemon-connection";
-import { getOrCreateClientId } from "@/utils/client-id";
+import { getOrCreateConnectionClientId } from "@/utils/client-id";
 import { z } from "zod";
 import { readValidatedJson, readValidatedString } from "@/storage/validated-storage";
 import {
@@ -574,7 +574,7 @@ function createDefaultDeps(): HostRuntimeControllerDeps {
         capabilities: appCapabilities,
         trace: nativePerformanceTrace,
       }),
-    getClientId: () => getOrCreateClientId(),
+    getClientId: () => getOrCreateConnectionClientId(),
     mountClientHandlers: ({ client, host }) => {
       const unmountServerData = mountServerDataPushRouter({
         client,
@@ -1670,7 +1670,12 @@ export class HostRuntimeStore {
       newServerId,
       createTimelineReplica({
         serverId: newServerId,
-        storage: this.replicaCache,
+        storage: {
+          readTimeline: (serverId, agentId) =>
+            directory.readOptionalCache(() => this.replicaCache.readTimeline(serverId, agentId)),
+          commitTimeline: (serverId, agentId, timeline) =>
+            this.replicaCache.commitTimeline(serverId, agentId, timeline),
+        },
         prepareAgent: (agentId) => directory.prepareAgentRoute(agentId),
       }),
     );
@@ -2088,7 +2093,12 @@ export class HostRuntimeStore {
         host.serverId,
         createTimelineReplica({
           serverId: host.serverId,
-          storage: this.replicaCache,
+          storage: {
+            readTimeline: (serverId, agentId) =>
+              directory.readOptionalCache(() => this.replicaCache.readTimeline(serverId, agentId)),
+            commitTimeline: (serverId, agentId, timeline) =>
+              this.replicaCache.commitTimeline(serverId, agentId, timeline),
+          },
           prepareAgent: (agentId) => directory.prepareAgentRoute(agentId),
         }),
       );

@@ -1,3 +1,4 @@
+import { DEFAULT_LAUNCH_SERVER_ID } from "@/create-agent-preferences/launch-defaults";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import {
   View,
@@ -1603,6 +1604,7 @@ function ProjectBlock({
         project,
         collapsed,
         supportsMultiplicityByServerId,
+        defaultServerId: DEFAULT_LAUNCH_SERVER_ID,
       }),
     [collapsed, project, supportsMultiplicityByServerId],
   );

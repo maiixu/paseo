@@ -21,6 +21,67 @@ describe("computeNotificationPlan", () => {
   const staleAtMs = nowMs - PRESENCE_THRESHOLD_MS - 1;
   const presentAtMs = nowMs - PRESENCE_THRESHOLD_MS + 1;
 
+  it("delivers a question to one connected web client after a prolonged absence", () => {
+    expect(
+      computeNotificationPlan({
+        allStates: [
+          state({ deviceType: "web", appVisible: false, lastActivityAtMs: staleAtMs - 600_000 }),
+          state({ deviceType: "web", appVisible: false, lastActivityAtMs: staleAtMs }),
+          state({ deviceType: "mobile", lastActivityAtMs: staleAtMs - 1 }),
+        ],
+        focusTarget: { kind: "agent", id: "agent-1" },
+        pushEligible: true,
+        allowStaleWebRecipient: true,
+        nowMs,
+      }),
+    ).toEqual({ inAppRecipientIndex: 1, shouldPush: false });
+  });
+
+  it("keeps push when only a stale mobile or an unidentified client remains", () => {
+    expect(
+      computeNotificationPlan({
+        allStates: [
+          state({ deviceType: "mobile", lastActivityAtMs: staleAtMs }),
+          state({ deviceType: "web", lastActivityAtMs: null }),
+        ],
+        focusTarget: { kind: "agent", id: "agent-1" },
+        pushEligible: true,
+        allowStaleWebRecipient: true,
+        nowMs,
+      }),
+    ).toEqual({ inAppRecipientIndex: null, shouldPush: true });
+  });
+
+  it("keeps a present recipient ahead of a stale web fallback", () => {
+    expect(
+      computeNotificationPlan({
+        allStates: [
+          state({ deviceType: "web", lastActivityAtMs: staleAtMs }),
+          state({ deviceType: "mobile", lastActivityAtMs: presentAtMs }),
+        ],
+        focusTarget: { kind: "agent", id: "agent-1" },
+        pushEligible: true,
+        allowStaleWebRecipient: true,
+        nowMs,
+      }),
+    ).toEqual({ inAppRecipientIndex: 1, shouldPush: false });
+  });
+
+  it("suppresses a question while another present client is viewing its agent", () => {
+    expect(
+      computeNotificationPlan({
+        allStates: [
+          state({ deviceType: "web", lastActivityAtMs: staleAtMs }),
+          state({ deviceType: "web", lastActivityAtMs: presentAtMs, focusedAgentId: "agent-1" }),
+        ],
+        focusTarget: { kind: "agent", id: "agent-1" },
+        pushEligible: true,
+        allowStaleWebRecipient: true,
+        nowMs,
+      }),
+    ).toEqual({ inAppRecipientIndex: null, shouldPush: false });
+  });
+
   it("does not suppress notifications when a focused client is stale", () => {
     const staleFocused = state({
       focusedAgentId: "agent-1",
