@@ -289,3 +289,54 @@ describe("resolveNewWorkspaceAutomaticServerId", () => {
     ).toBe("online-empty");
   });
 });
+
+describe("configured launch host", () => {
+  const input = {
+    allServerIds: ["mac", "cloud"],
+    defaultServerId: "cloud",
+    routeServerId: null,
+    lastActiveProject: projectFor("mac"),
+    projects: [projectFor("mac"), projectFor("cloud")],
+    hostConnectionStatusByServerId: statuses({ mac: "online", cloud: "offline" }),
+    workspaceMultiplicityByServerId: multiplicity(),
+  };
+
+  it("pins global New to the configured host even while it is offline", () => {
+    expect(resolveNewWorkspaceInitialServerId(input)).toBe("cloud");
+    expect(
+      resolveNewWorkspaceAutomaticServerId({
+        ...input,
+        currentServerId: "cloud",
+        nextServerId: "cloud",
+      }),
+    ).toBe("cloud");
+  });
+
+  it("keeps an explicit project host ahead of the global pin", () => {
+    expect(resolveNewWorkspaceInitialServerId({ ...input, routeServerId: "mac" })).toBe("mac");
+    expect(
+      resolveNewWorkspaceAutomaticServerId({
+        ...input,
+        routeServerId: "mac",
+        currentServerId: "cloud",
+        nextServerId: "mac",
+      }),
+    ).toBe("mac");
+  });
+
+  it("replaces an early automatic host when configured-host hydration arrives", () => {
+    expect(
+      resolveNewWorkspaceAutomaticServerId({
+        ...input,
+        currentServerId: "mac",
+        nextServerId: "cloud",
+      }),
+    ).toBe("cloud");
+  });
+
+  it("uses existing host resolution when the configured host is not present", () => {
+    expect(resolveNewWorkspaceInitialServerId({ ...input, defaultServerId: "removed" })).toBe(
+      "mac",
+    );
+  });
+});

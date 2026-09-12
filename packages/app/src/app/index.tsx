@@ -13,6 +13,7 @@ import {
   useLastWorkspaceSelection,
 } from "@/stores/navigation-active-workspace-store";
 import { shouldUseDesktopDaemon } from "@/desktop/daemon/desktop-daemon";
+import { DEFAULT_LAUNCH_SERVER_ID } from "@/create-agent-preferences/launch-defaults";
 
 const isDesktop = shouldUseDesktopDaemon();
 
@@ -34,6 +35,7 @@ export default function Index() {
 
   const startupRoute = resolveStartupRoute({
     route: { kind: "index", pathname },
+    defaultServerId: DEFAULT_LAUNCH_SERVER_ID,
     startupBlocker: bootstrapState.startupBlocker,
     hostRegistryStatus,
     hosts,

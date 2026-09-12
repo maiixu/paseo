@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Paseo Browser Companion</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <h1>Paseo Browser Companion</h1>
+    <p id="permission">Checking notification permission…</p>
+    <p id="pages">Checking connected pages…</p>
+    <div class="actions">
+      <button id="test" type="button">Test notification</button>
+      <button id="refresh" type="button">Refresh</button>
+    </div>
+    <p id="outcome" role="status" aria-live="polite"></p>
+    <h2>Recent notification events</h2>
+    <ol id="history"></ol>
+    <p class="note">
+      Chrome acceptance does not confirm a visible system banner. Test does not exercise an agent or
+      daemon policy.
+    </p>
+    <script src="popup.js"></script>
+  </body>
+</html>

@@ -122,10 +122,10 @@ export function useSidebarWorkspacesList(options?: {
     return matched;
   }, [allServerIds, hostFilters, hostRegistryLoaded]);
   useEffect(() => {
-    if (!isActive) return;
+    if (!isActive || !hostRegistryLoaded) return;
     const releases = serverIds.map((serverId) => runtime.acquireDirectoryDemand(serverId));
     return () => releases.forEach((release) => release());
-  }, [isActive, runtime, serverIds]);
+  }, [hostRegistryLoaded, isActive, runtime, serverIds]);
 
   useEffect(() => {
     if (!hostRegistryLoaded) {

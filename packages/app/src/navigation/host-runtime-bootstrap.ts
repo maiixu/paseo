@@ -9,6 +9,7 @@ import type { Href } from "expo-router";
 import {
   buildHostRootRoute,
   buildHostWorkspaceRoute,
+  buildNewWorkspaceRoute,
   buildOpenProjectRoute,
 } from "@/utils/host-routes";
 
@@ -112,6 +113,7 @@ interface ResolveStartupRouteBaseInput {
 
 export interface ResolveIndexStartupRouteInput extends ResolveStartupRouteBaseInput {
   route: IndexStartupRouteTarget;
+  defaultServerId?: string | null;
   anyOnlineHostServerId: string | null;
   workspaceSelection: ActiveWorkspaceSelection | null;
   workspaceSelectionStatus: WorkspaceSelectionStatus;
@@ -154,9 +156,13 @@ export function resolveWorkspaceSelectionStatus(input: {
 
 export function resolveHostIndexRoute(input: {
   serverId: string;
+  newWorkspaceDraftId?: string;
   workspaceSelection: ActiveWorkspaceSelection | null;
   workspaceSelectionStatus: WorkspaceSelectionStatus;
 }): Href {
+  if (input.newWorkspaceDraftId) {
+    return buildNewWorkspaceRoute({ serverId: input.serverId, draftId: input.newWorkspaceDraftId });
+  }
   if (
     input.workspaceSelection?.serverId === input.serverId &&
     shouldRestoreWorkspaceSelection(input)
@@ -184,6 +190,11 @@ function resolveReadyIndexStartupRoute(input: ResolveIndexStartupRouteInput): St
 
   if (!input.isWorkspaceSelectionLoaded) {
     return { kind: "splash" };
+  }
+
+  const defaultServerId = input.defaultServerId ?? null;
+  if (defaultServerId && hostExists(input.hosts, defaultServerId)) {
+    return { kind: "redirect", href: buildHostRootRoute(defaultServerId) };
   }
 
   if (

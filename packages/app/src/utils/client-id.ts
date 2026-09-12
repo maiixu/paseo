@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { z } from "zod";
 import { readValidatedString } from "@/storage/validated-storage";
+import { getIsElectron, isWeb } from "@/constants/platform";
 
 const CLIENT_ID_STORAGE_KEY = "@paseo:client-id-v1";
 
@@ -71,4 +72,17 @@ const defaultResolver = createClientIdResolver({
 
 export async function getOrCreateClientId(): Promise<string> {
   return defaultResolver.getOrCreate();
+}
+
+let documentConnectionClientId: string | null = null;
+
+// Browser tabs must not share a daemon Session's presence record. Keep this in
+// memory: duplicated tabs can copy sessionStorage. Persistent subagent markers
+// continue to use getOrCreateClientId so reloading does not leave orphan markers.
+export async function getOrCreateConnectionClientId(): Promise<string> {
+  if (isWeb && !getIsElectron()) {
+    documentConnectionClientId ??= `cid_${generateUuidFromGlobalCrypto()}`;
+    return documentConnectionClientId;
+  }
+  return getOrCreateClientId();
 }

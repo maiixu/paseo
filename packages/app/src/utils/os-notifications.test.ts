@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { BrowserFeedbackNotification } from "@getpaseo/protocol/browser-feedback";
+import type { BrowserCompanionClient } from "@/browser-feedback/companion-client";
 
 interface MockNotificationOptions {
   body?: string;
@@ -33,6 +35,7 @@ const originalGlobals: GlobalSnapshot = {
 async function loadModuleForPlatform(
   platform: "web" | "ios" | "android",
   options?: {
+    companion?: Pick<BrowserCompanionClient, "send"> | null;
     desktopHost?: {
       notification?: {
         sendNotification?: (payload: {
@@ -48,6 +51,9 @@ async function loadModuleForPlatform(
   vi.doMock("react-native", () => ({ Platform: { OS: platform } }));
   vi.doMock("@/desktop/host", () => ({
     getDesktopHost: () => options?.desktopHost ?? null,
+  }));
+  vi.doMock("@/browser-feedback/companion-client", () => ({
+    getBrowserCompanion: () => options?.companion ?? null,
   }));
   vi.doMock("expo-asset", () => ({
     Asset: {
@@ -94,6 +100,7 @@ describe("sendOsNotification", () => {
 
   afterEach(() => {
     vi.doUnmock("react-native");
+    vi.doUnmock("@/browser-feedback/companion-client");
     vi.restoreAllMocks();
     vi.resetModules();
     restoreGlobals();
@@ -286,5 +293,112 @@ describe("sendOsNotification", () => {
       body: "If you can see this, desktop notifications work.",
       data: { serverId: "srv-1" },
     });
+  });
+
+  const feedback: BrowserFeedbackNotification = {
+    id: "server-1-agent-1-turn-1",
+    identity: { serverId: "server-1", agentId: "agent-1", workspaceId: "workspace-1" },
+    reason: "finished",
+    title: "Agent 1 finished",
+    body: "Completed the task",
+    createdAt: "2026-09-06T12:00:00.000Z",
+  };
+
+  function recordWebNotifications() {
+    const created: string[] = [];
+    class BrowserNotification {
+      static permission = "granted";
+      constructor(title: string) {
+        created.push(title);
+      }
+      addEventListener(): void {}
+    }
+    (globalThis as { Notification?: unknown }).Notification = BrowserNotification;
+    return created;
+  }
+
+  it.each(["accepted", "suppressed", "duplicate"] as const)(
+    "does not call the Web Notification API when the companion returns %s",
+    async (status) => {
+      const created = recordWebNotifications();
+      const send = vi.fn<BrowserCompanionClient["send"]>().mockResolvedValue({
+        source: "paseo-browser-companion",
+        version: 1,
+        type: "delivery",
+        requestId: "request-1",
+        status,
+        error: null,
+      });
+      const { sendOsNotification } = await loadModuleForPlatform("web", { companion: { send } });
+
+      expect(await sendOsNotification({ title: feedback.title, browserFeedback: feedback })).toBe(
+        true,
+      );
+      expect(send).toHaveBeenCalledExactlyOnceWith(feedback);
+      expect(created).toEqual([]);
+    },
+  );
+
+  it("does not fall back after a companion delivery timeout that may have reached Chrome", async () => {
+    const created = recordWebNotifications();
+    const send = vi.fn<BrowserCompanionClient["send"]>().mockResolvedValue({
+      source: "paseo-browser-companion",
+      version: 1,
+      type: "delivery",
+      requestId: "request-1",
+      status: "failed",
+      error: "Acknowledgement timed out",
+    });
+    const { sendOsNotification } = await loadModuleForPlatform("web", { companion: { send } });
+
+    expect(await sendOsNotification({ title: feedback.title, browserFeedback: feedback })).toBe(
+      false,
+    );
+    expect(send).toHaveBeenCalledExactlyOnceWith(feedback);
+    expect(created).toEqual([]);
+  });
+
+  it("propagates a companion send rejection without a duplicate browser fallback", async () => {
+    const created = recordWebNotifications();
+    const send = vi
+      .fn<BrowserCompanionClient["send"]>()
+      .mockRejectedValue(new Error("Disconnected"));
+    const { sendOsNotification } = await loadModuleForPlatform("web", { companion: { send } });
+
+    await expect(
+      sendOsNotification({ title: feedback.title, browserFeedback: feedback }),
+    ).rejects.toThrow("Disconnected");
+    expect(created).toEqual([]);
+  });
+
+  it("retains the stock browser notification when the companion never handshakes", async () => {
+    const created = recordWebNotifications();
+    const send = vi
+      .fn<BrowserCompanionClient["send"]>()
+      .mockResolvedValue({ status: "unavailable" });
+    const { sendOsNotification } = await loadModuleForPlatform("web", { companion: { send } });
+
+    expect(await sendOsNotification({ title: feedback.title, browserFeedback: feedback })).toBe(
+      true,
+    );
+    expect(send).toHaveBeenCalledExactlyOnceWith(feedback);
+    expect(created).toEqual([feedback.title]);
+  });
+
+  it("preserves desktop notification delivery without invoking the browser companion", async () => {
+    const created = recordWebNotifications();
+    const send = vi.fn<BrowserCompanionClient["send"]>();
+    const sendNotification = vi.fn(async () => true);
+    const { sendOsNotification } = await loadModuleForPlatform("web", {
+      companion: { send },
+      desktopHost: { notification: { sendNotification } },
+    });
+
+    expect(await sendOsNotification({ title: feedback.title, browserFeedback: feedback })).toBe(
+      true,
+    );
+    expect(sendNotification).toHaveBeenCalledTimes(1);
+    expect(send).not.toHaveBeenCalled();
+    expect(created).toEqual([]);
   });
 });

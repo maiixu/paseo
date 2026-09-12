@@ -40,6 +40,10 @@ export function resolveProviderIconName(
   if (iconSvg) {
     return { kind: "svg", svg: iconSvg };
   }
+  if (provider === "antigravity" || provider === "gemini") {
+    return { kind: "builtin", id: "gemini" };
+  }
+  if (provider === "claude-bedrock") return { kind: "builtin", id: "aws" };
   if (KNOWN_PROVIDER_IDS.has(provider)) {
     return { kind: "catalog", id: provider };
   }

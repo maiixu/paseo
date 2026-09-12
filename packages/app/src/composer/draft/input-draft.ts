@@ -1,3 +1,5 @@
+import { DEFAULT_LAUNCH_PROFILE_ID } from "@/create-agent-preferences/launch-defaults";
+import { draftLaunchSelections } from "@/create-agent-preferences/draft-launch-selection";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { UserComposerAttachment } from "@/attachments/types";
 import type { TextReplacement } from "@/composer/types";
@@ -5,7 +7,7 @@ import type { DraftAgentControlsProps } from "@/composer/agent-controls";
 import type { DraftCommandConfig } from "@/hooks/use-agent-commands-query";
 import {
   useAgentFormState,
-  type CreateAgentInitialValues,
+  type FormInitialValues,
   type UseAgentFormStateResult,
 } from "@/hooks/use-agent-form-state";
 import { useDraftAgentFeatures } from "@/hooks/use-draft-agent-features";
@@ -32,8 +34,9 @@ type AttachmentUpdater =
 
 interface AgentInputDraftComposerOptions {
   initialServerId: string | null;
-  initialValues?: CreateAgentInitialValues;
+  initialValues?: FormInitialValues;
   initialFeatureValues?: Record<string, unknown>;
+  launchDraftId?: string;
   isVisible?: boolean;
   lockedWorkingDir?: string;
 }
@@ -65,13 +68,36 @@ export interface AgentInputDraft {
   composerState: DraftComposerState | null;
 }
 
+function useDraftLaunchDefaults(options: AgentInputDraftComposerOptions | null) {
+  const launchDraftId = DEFAULT_LAUNCH_PROFILE_ID ? options?.launchDraftId : undefined;
+  const restoredSelection = useMemo(
+    () => draftLaunchSelections.read(launchDraftId, options?.initialServerId),
+    [launchDraftId, options?.initialServerId],
+  );
+  const initialValues = useMemo(
+    () =>
+      restoredSelection
+        ? { ...restoredSelection, ...options?.initialValues }
+        : options?.initialValues,
+    [restoredSelection, options?.initialValues],
+  );
+  return {
+    launchDraftId,
+    initialValues,
+    initialFeatureValues: options?.initialFeatureValues ?? restoredSelection?.featureValues,
+  };
+}
+
 export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDraft {
   const composerOptions = input.composer ?? null;
   const workingDir = composerOptions?.lockedWorkingDir?.trim() || "";
+  const { launchDraftId, initialValues, initialFeatureValues } =
+    useDraftLaunchDefaults(composerOptions);
+  const finalizedLaunchDraftRef = useRef<string | undefined>(undefined);
   const formState = useAgentFormState({
     workingDir,
     serverId: composerOptions?.initialServerId ?? null,
-    initialValues: composerOptions?.initialValues,
+    initialValues,
     isVisible: composerOptions?.isVisible ?? false,
     isCreateFlow: true,
   });
@@ -169,9 +195,11 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
   const clear = useCallback(
     (lifecycle: "sent" | "abandoned") => {
       textPublication.cancel();
+      finalizedLaunchDraftRef.current = launchDraftId;
+      draftLaunchSelections.clear(launchDraftId);
       useDraftStore.getState().clearDraftInput({ draftKey, lifecycle });
     },
-    [draftKey, textPublication],
+    [draftKey, launchDraftId, textPublication],
   );
 
   useEffect(() => {
@@ -246,6 +274,7 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
   const {
     features: draftFeatures,
     featureValues: draftFeatureValues,
+    selectionFeatureValues: draftFeatureSelections,
     setFeatureValue: setDraftFeatureValue,
     applyProfileFeatureValues,
   } = useDraftAgentFeatures({
@@ -255,8 +284,29 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
     modeId: formState.selectedMode,
     modelId: effectiveModelId,
     thinkingOptionId: effectiveThinkingOptionId,
-    initialFeatureValues: composerOptions?.initialFeatureValues,
+    initialFeatureValues,
+    defaultFeatureValues: formState.defaultFeatureValues,
   });
+
+  useEffect(() => {
+    if (!launchDraftId || finalizedLaunchDraftRef.current === launchDraftId) return;
+    if (!formState.selectedProvider || !formState.selectedServerId || formState.isModelLoading)
+      return;
+    draftLaunchSelections.write(launchDraftId, {
+      serverId: formState.selectedServerId,
+      provider: formState.selectedProvider,
+      model: effectiveModelId,
+      modeId: formState.selectedMode,
+      thinkingOptionId: effectiveThinkingOptionId,
+      featureValues: draftFeatureSelections,
+    });
+  }, [
+    launchDraftId,
+    formState,
+    effectiveModelId,
+    effectiveThinkingOptionId,
+    draftFeatureSelections,
+  ]);
 
   const applyDraftAgentProfile = useCallback(
     (profile: Parameters<typeof formState.applyProfileFromUser>[0]) => {

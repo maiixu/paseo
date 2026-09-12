@@ -2,11 +2,14 @@ import { Asset } from "expo-asset";
 import { getDesktopHost } from "@/desktop/host";
 import { buildNotificationRoute, resolveNotificationTarget } from "./notification-routing";
 import { isNative } from "@/constants/platform";
+import type { BrowserFeedbackNotification } from "@getpaseo/protocol/browser-feedback";
+import { getBrowserCompanion } from "@/browser-feedback/companion-client";
 
 interface OsNotificationPayload {
   title: string;
   body?: string;
   data?: Record<string, unknown>;
+  browserFeedback?: BrowserFeedbackNotification;
 }
 
 export interface WebNotificationClickDetail {
@@ -172,6 +175,15 @@ export async function sendOsNotification(payload: OsNotificationPayload): Promis
   const desktopNotificationSender = getDesktopNotificationSender();
   if (desktopNotificationSender) {
     return await desktopNotificationSender(payload);
+  }
+
+  if (payload.browserFeedback) {
+    const companion = getBrowserCompanion();
+    const delivery = await companion?.send(payload.browserFeedback);
+    if (delivery && delivery.status !== "unavailable") {
+      // Never fall back after an ambiguous timeout: Chrome may already have accepted it.
+      return delivery.status !== "failed";
+    }
   }
 
   const NotificationConstructor = getWebNotificationConstructor();

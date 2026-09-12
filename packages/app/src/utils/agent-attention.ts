@@ -11,9 +11,21 @@ interface ShouldClearAgentAttentionInput {
 
 export type AgentAttentionClearTrigger =
   | "focus-entry"
+  | "completion-viewed"
   | "input-focus"
   | "prompt-send"
   | "agent-blur";
+
+interface ViewedAgentCompletionInput {
+  status: Agent["status"] | null;
+  attentionReason: Agent["attentionReason"];
+  isActivelyViewed: boolean;
+}
+
+export function shouldClearViewedAgentCompletion(input: ViewedAgentCompletionInput): boolean {
+  const isFinishedTurn = input.status === "idle" && input.attentionReason === "finished";
+  return input.isActivelyViewed && isFinishedTurn;
+}
 
 const ATTENTION_REASON_PRIORITY = {
   permission: 0,

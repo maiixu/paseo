@@ -43,6 +43,9 @@ import {
 } from "@/stores/session-store";
 import { useWorkspaceSetupStore } from "@/stores/workspace-setup-store";
 import { sendOsNotification } from "@/utils/os-notifications";
+import { isNative } from "@/constants/platform";
+import { AttentionDelivery } from "@/browser-feedback/attention-delivery";
+import { traceBrowserFeedback } from "@/browser-feedback/companion-client";
 import { getIsAppActivelyVisible, getIsAppVisible } from "@/utils/app-visibility";
 import {
   getInitKey,
@@ -125,6 +128,15 @@ const findLatestAssistantMessageText = (items: StreamItem[]): string | null => {
   }
   return null;
 };
+
+function getAgentNotificationPreview(
+  session: SessionState | undefined,
+  agentId: string,
+): string | null {
+  const head = session?.agentStreamHead.get(agentId) ?? [];
+  const tail = session?.agentStreamTail.get(agentId) ?? [];
+  return findLatestAssistantMessageText(head) ?? findLatestAssistantMessageText(tail);
+}
 
 const getLatestPermissionRequest = (
   session: SessionState | undefined,
@@ -249,7 +261,7 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
     (state) => state.sessions[serverId]?.focusedTerminalId ?? null,
   );
   const _sessionStateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const attentionNotifiedRef = useRef<Map<string, number>>(new Map());
+  const attentionDeliveryRef = useRef(new AttentionDelivery());
   const appStateRef = useRef(AppState.currentState);
   const forcedTimelineTailReplacements = useRef(new Set<string>());
   const viewedTimelineSyncRef = useRef<ViewedTimelineOwner | null>(null);
@@ -292,58 +304,80 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
   useEffect(() => startPushNotifications({ client, serverId }), [client, serverId]);
 
   const notifyAgentAttention = useCallback(
-    (params: {
+    async (params: {
       agentId: string;
       reason: "finished" | "error" | "permission";
       timestamp: string;
       notification?: AgentAttentionNotificationPayload;
     }) => {
-      const appState = appStateRef.current;
+      if (isNative || params.reason === "error") return;
       const session = useSessionStore.getState().sessions[serverId];
-      const attentionFocusedAgentId = session?.focusedAgentId ?? null;
-      if (params.reason === "error") {
+      const agent = session?.agents.get(params.agentId);
+      const identity = {
+        serverId,
+        agentId: params.agentId,
+        workspaceId: params.notification?.data.workspaceId ?? agent?.workspaceId ?? null,
+      };
+      const isActivelyVisible = getIsAppActivelyVisible(appStateRef.current);
+      if (isActivelyVisible && session?.focusedAgentId === params.agentId) {
+        traceBrowserFeedback({ identity, stage: "suppressed-focused", detail: params.reason });
         return;
       }
-      const isActivelyVisible = getIsAppActivelyVisible(appState);
-      const isAwayFromAgent = !isActivelyVisible || attentionFocusedAgentId !== params.agentId;
-      if (!isAwayFromAgent) {
-        return;
-      }
-
-      const timestampMs = new Date(params.timestamp).getTime();
-      const lastNotified = attentionNotifiedRef.current.get(params.agentId);
-      if (lastNotified && lastNotified >= timestampMs) {
-        return;
-      }
-      attentionNotifiedRef.current.set(params.agentId, timestampMs);
-
-      const head = session?.agentStreamHead.get(params.agentId) ?? [];
-      const tail = session?.agentStreamTail.get(params.agentId) ?? [];
-      const assistantMessage =
-        findLatestAssistantMessageText(head) ?? findLatestAssistantMessageText(tail);
-      const permissionRequest = getLatestPermissionRequest(session, params.agentId);
-      const workspaceId = session?.agents?.get(params.agentId)?.workspaceId;
 
       const notification = resolveAgentAttentionNotification({
         notification: params.notification,
         reason: params.reason,
         serverId,
-        workspaceId,
+        workspaceId: agent?.workspaceId,
         agentId: params.agentId,
-        assistantMessage,
-        permissionRequest,
+        assistantMessage: getAgentNotificationPreview(session, params.agentId),
+        permissionRequest: getLatestPermissionRequest(session, params.agentId),
       });
       if (!notification) {
+        traceBrowserFeedback({ identity, stage: "payload-unavailable", detail: params.reason });
         return;
       }
 
-      void sendOsNotification({
-        title: notification.title,
-        body: notification.body,
-        data: notification.data,
-      });
+      // The stock daemon chooses one recipient. Its event timestamp identifies exact repeats
+      // at that recipient; a cached agent attentionTimestamp can still belong to an older turn.
+      const id = JSON.stringify([serverId, params.agentId, params.reason, params.timestamp]);
+      try {
+        const accepted = await attentionDeliveryRef.current.deliver(id, () =>
+          sendOsNotification({
+            title: notification.title,
+            body: notification.body,
+            data: notification.data,
+            browserFeedback: {
+              id,
+              identity,
+              reason: params.reason === "permission" ? "permission" : "finished",
+              title: `${agent?.title || params.agentId} · ${notification.title}`.slice(0, 300),
+              body: notification.body.slice(0, 4000),
+              createdAt: params.timestamp,
+            },
+          }),
+        );
+        traceBrowserFeedback({
+          identity,
+          stage: accepted ? "accepted" : "failed",
+          detail: params.reason,
+        });
+        if (!accepted)
+          toast.error(
+            "Agent notification was not sent. Check browser notification settings and the Paseo companion.",
+          );
+      } catch {
+        traceBrowserFeedback({
+          identity,
+          stage: "failed",
+          detail: "Notification sender rejected the request",
+        });
+        toast.error(
+          "Agent notification was not sent. Check browser notification settings and the Paseo companion.",
+        );
+      }
     },
-    [serverId],
+    [serverId, toast],
   );
 
   useEffect(() => {
@@ -548,9 +582,20 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
     });
 
     const unsubAgentAttention = client.onAgentAttentionRequired((notification) => {
-      if (notification.shouldNotify) {
-        notifyAgentAttention(notification);
-      }
+      traceBrowserFeedback({
+        identity: {
+          serverId,
+          agentId: notification.agentId,
+          workspaceId:
+            notification.notification?.data.workspaceId ??
+            useSessionStore.getState().sessions[serverId]?.agents.get(notification.agentId)
+              ?.workspaceId ??
+            null,
+        },
+        stage: notification.shouldNotify ? "received" : "suppressed-by-daemon",
+        detail: `${notification.reason} ${notification.timestamp}`,
+      });
+      if (notification.shouldNotify) void notifyAgentAttention(notification);
     });
 
     const unsubAgentTimeline = client.on("fetch_agent_timeline_response", (message) => {
