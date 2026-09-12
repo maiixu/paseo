@@ -44,7 +44,7 @@ import {
 import { useWorkspaceSetupStore } from "@/stores/workspace-setup-store";
 import { sendOsNotification } from "@/utils/os-notifications";
 import { isNative } from "@/constants/platform";
-import { AttentionDelivery } from "@/browser-feedback/attention-delivery";
+import { AttentionDelivery, attentionDeliveryId } from "@/browser-feedback/attention-delivery";
 import { traceBrowserFeedback } from "@/browser-feedback/companion-client";
 import { getIsAppActivelyVisible, getIsAppVisible } from "@/utils/app-visibility";
 import {
@@ -338,9 +338,11 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
         return;
       }
 
-      // The stock daemon chooses one recipient. Its event timestamp identifies exact repeats
-      // at that recipient; a cached agent attentionTimestamp can still belong to an older turn.
-      const id = JSON.stringify([serverId, params.agentId, params.reason, params.timestamp]);
+      // Older daemons have event timestamps; new questions carry their stable request identity.
+      const id = attentionDeliveryId(serverId, {
+        ...params,
+        requestId: params.notification?.data.requestId,
+      });
       try {
         const accepted = await attentionDeliveryRef.current.deliver(id, () =>
           sendOsNotification({

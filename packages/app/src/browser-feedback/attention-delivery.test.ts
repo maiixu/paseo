@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { AttentionDelivery } from "./attention-delivery";
+import { AttentionDelivery, attentionDeliveryId } from "./attention-delivery";
 
 describe("attention delivery", () => {
   it("shares one in-flight notification and remembers successful acceptance", async () => {
@@ -67,4 +67,21 @@ describe("attention delivery", () => {
     finish(false);
     expect(await pending).toBe(false);
   });
+});
+
+// Distinct questions can arrive in one millisecond; a replay can arrive later.
+it("identifies questions independently of event timestamps", async () => {
+  const delivery = new AttentionDelivery();
+  const send = vi.fn(async () => true);
+  for (const [requestId, timestamp] of [
+    ["q1", "same-time"],
+    ["q2", "same-time"],
+    ["q1", "later-time"],
+  ]) {
+    await delivery.deliver(
+      attentionDeliveryId("host", { agentId: "agent", reason: "permission", timestamp, requestId }),
+      send,
+    );
+  }
+  expect(send).toHaveBeenCalledTimes(2);
 });

@@ -1,3 +1,19 @@
+export function attentionDeliveryId(
+  serverId: string,
+  input: {
+    agentId: string;
+    reason: "finished" | "error" | "permission";
+    timestamp: string;
+    requestId?: unknown;
+  },
+): string {
+  const identity =
+    input.reason === "permission" && typeof input.requestId === "string"
+      ? ["request", input.requestId]
+      : ["event", input.timestamp];
+  return JSON.stringify([serverId, input.agentId, input.reason, ...identity]);
+}
+
 // An unsuccessful attempt must remain retryable. Concurrent copies share one attempt.
 export class AttentionDelivery {
   private accepted = new Set<string>();
