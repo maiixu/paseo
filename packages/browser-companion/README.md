@@ -6,9 +6,9 @@ This private Chrome extension accompanies the browser-feedback Web build. It rec
 
 The candidate starts at upstream tag `v0.8.0` (`b8e24677e12b`). Retain the companion, per-tab feedback, workspace titles, fresh Hub defaults and bounded optional cache reads. Preserve upstream host-scoped provider SVGs and the new externally owned form host/directory state when porting defaults.
 
-Use upstream native async questions and Codex Fast capabilities instead of the former `e241abece` and `ae7c4cba5` backports. The candidate does not change upstream daemon source. This is a source/build milestone, not production acceptance: test packaged daemons, saved sessions, profiles, schedules and the two-host browser journey before switching either host.
+Use upstream native async questions and Codex Fast capabilities instead of the former `e241abece` and `ae7c4cba5` backports. A small daemon patch separately notifies new distinct questions and lets a connected Web client receive questions after the activity window expires. Completion and ordinary tool-permission policy remain upstream. This is a source/build milestone, not production acceptance: test packaged daemons, saved sessions, profiles, schedules and the two-host browser journey before switching either host.
 
-Question notifications still need acceptance. Upstream emits permission attention for the first pending request and selects a browser using recent activity. A second outstanding question and an absence longer than three minutes require explicit tests; passing the component or companion tests does not prove those paths deliver an OS notification.
+Question notifications still need acceptance. The second outstanding question, an absence longer than three minutes, focused suppression and history replay require explicit tests; passing the component or companion tests does not prove those paths deliver an OS notification.
 
 ## Build and load
 

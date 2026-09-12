@@ -2510,6 +2510,7 @@ export class VoiceAssistantWebSocketServer {
     }
 
     return {
+      deviceType: activity.deviceType,
       appVisible: activity.appVisible,
       focusedAgentId: activity.focusedAgentId,
       focusedTerminalId: activity.focusedTerminalId,
@@ -2526,6 +2527,7 @@ export class VoiceAssistantWebSocketServer {
     if (!agent?.workspaceId) {
       return;
     }
+    const permissionRequest = findLatestPermissionRequest(agent.pendingPermissions);
     const clientEntries: Array<{
       ws: WebSocketLike;
       state: ClientPresenceState;
@@ -2548,7 +2550,7 @@ export class VoiceAssistantWebSocketServer {
       workspaceId: agent.workspaceId,
       agentId: params.agentId,
       assistantMessage,
-      permissionRequest: findLatestPermissionRequest(agent.pendingPermissions),
+      permissionRequest,
     });
 
     const plan = computeNotificationPlan({
@@ -2556,6 +2558,8 @@ export class VoiceAssistantWebSocketServer {
       focusTarget: { kind: "agent", id: params.agentId },
       pushEligible: isPushEligibleAttentionReason(params.reason),
       nowMs,
+      allowStaleWebRecipient:
+        params.reason === "permission" && permissionRequest?.kind === "question",
     });
 
     if (plan.shouldPush) {
