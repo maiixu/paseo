@@ -68,6 +68,7 @@ function setup() {
   const updates: TabUpdate[] = [];
   const created: string[] = [];
   const focused: number[] = [];
+  const cleared: string[] = [];
   let stored: unknown = undefined;
   let permission: "granted" | "denied" = "granted";
   let notificationFailure = false;
@@ -146,7 +147,9 @@ function setup() {
         notification: { title: notification.title, body: notification.body },
       });
     },
-    async clearNotification() {},
+    async clearNotification(id) {
+      cleared.push(id);
+    },
   };
   function sender(tabId: number): PageSender {
     const tab = tabs.get(tabId);
@@ -189,6 +192,7 @@ function setup() {
     options,
     tabs,
     notifications,
+    cleared,
     updates,
     created,
     focused,
@@ -233,6 +237,25 @@ function delivery(
 }
 
 describe("Paseo browser companion", () => {
+  it.each(["finished", "permission"] as const)(
+    "clears %s notifications on click without resolving agent state",
+    async (reason) => {
+      const env = setup();
+      await env.register(1, AGENT_A, "attention");
+      await env.register(2, AGENT_B);
+      await env.companion.receive(env.sender(2), {
+        ...envelope,
+        type: "notify",
+        requestId: "click-clear",
+        notification: { ...completion, reason },
+      });
+      await env.companion.click(env.notifications[0].id);
+      expect(env.cleared).toEqual([env.notifications[0].id]);
+      const state = await env.companion.diagnostics();
+      expect(state.bindings.find((b) => b.tabId === 1)?.state.status).toBe("attention");
+    },
+  );
+
   it("activates A's existing tab and window while preserving B's URL", async () => {
     const env = setup();
     await env.register(1, AGENT_A);
