@@ -73,6 +73,8 @@ interface AgentFormInputs {
   isPreferencesLoading: boolean;
   hasSnapshot: boolean;
   initialValues: FormInitialValues | undefined;
+  // Launch defaults affect resolution, but are not a change to the caller's draft identity.
+  defaultInitialValues?: FormInitialValues;
   preferences: FormPreferences | null;
   providerModelsByProvider: ProviderModelsByProvider;
   allowedProviderMap: Map<AgentProvider, AgentProviderDefinition>;
@@ -605,7 +607,11 @@ function receiveInputs(
   }
   if (!active || action.isPreferencesLoading || !action.serverId || !action.hasSnapshot)
     return next;
-  return completeResolution(next, { ...action, type: "COMPLETE_RESOLUTION" });
+  return completeResolution(next, {
+    ...action,
+    initialValues: action.defaultInitialValues ?? action.initialValues,
+    type: "COMPLETE_RESOLUTION",
+  });
 }
 
 export function resolveAgentForm(

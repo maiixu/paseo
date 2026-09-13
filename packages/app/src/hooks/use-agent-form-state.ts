@@ -318,7 +318,9 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
       isCreateFlow,
       isPreferencesLoading: isPreferencesLoading || isPinnedProfileBlocked,
       hasSnapshot: snapshotEntries !== undefined,
-      initialValues: pinnedProfile.status === "ready" ? pinnedProfile.initialValues : initialValues,
+      initialValues,
+      defaultInitialValues:
+        pinnedProfile.status === "ready" ? pinnedProfile.initialValues : undefined,
       preferences: pinnedProfile.status === "disabled" ? preferences : {},
       providerModelsByProvider: snapshotProviderModelsByProvider,
       allowedProviderMap: snapshotResolvableProviderDefinitionMap,
