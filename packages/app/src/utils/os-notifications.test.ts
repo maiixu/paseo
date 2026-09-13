@@ -106,118 +106,131 @@ describe("sendOsNotification", () => {
     restoreGlobals();
   });
 
-  it("dispatches a click event that the app can handle", async () => {
-    const created: MockNotificationInstance[] = [];
+  it.each(["finished", "permission"])(
+    "closes a %s notification when the app handles its click",
+    async (reason) => {
+      const created: MockNotificationInstance[] = [];
 
-    class MockNotification implements MockNotificationInstance {
-      static permission = "granted";
-      static requestPermission = vi.fn(async () => "granted");
-      clickListeners: Array<(event: Event) => void> = [];
-      close = vi.fn();
+      class MockNotification implements MockNotificationInstance {
+        static permission = "granted";
+        static requestPermission = vi.fn(async () => "granted");
+        clickListeners: Array<(event: Event) => void> = [];
+        close = vi.fn();
 
-      constructor(
-        public title: string,
-        public options?: MockNotificationOptions,
-      ) {
-        created.push(this);
-      }
+        constructor(
+          public title: string,
+          public options?: MockNotificationOptions,
+        ) {
+          created.push(this);
+        }
 
-      addEventListener(event: string, listener: (event: Event) => void): void {
-        if (event === "click") {
-          this.clickListeners.push(listener);
+        addEventListener(event: string, listener: (event: Event) => void): void {
+          if (event === "click") {
+            this.clickListeners.push(listener);
+          }
         }
       }
-    }
 
-    const dispatchEvent = vi.fn((event: unknown) => {
-      void event;
-      return false;
-    });
-    const assign = vi.fn();
+      const dispatchEvent = vi.fn((event: unknown) => {
+        void event;
+        return false;
+      });
+      const assign = vi.fn();
 
-    (globalThis as { Notification?: unknown }).Notification = MockNotification;
-    (globalThis as { dispatchEvent?: unknown }).dispatchEvent = dispatchEvent;
-    (globalThis as { location?: unknown }).location = { assign };
+      (globalThis as { Notification?: unknown }).Notification = MockNotification;
+      (globalThis as { dispatchEvent?: unknown }).dispatchEvent = dispatchEvent;
+      (globalThis as { location?: unknown }).location = { assign };
 
-    const { sendOsNotification, WEB_NOTIFICATION_CLICK_EVENT } = await loadModuleForPlatform("web");
+      const { sendOsNotification, WEB_NOTIFICATION_CLICK_EVENT } =
+        await loadModuleForPlatform("web");
 
-    const sent = await sendOsNotification({
-      title: "Agent finished",
-      body: "Done",
-      data: { serverId: "srv-1", agentId: "agent-1" },
-    });
+      const sent = await sendOsNotification({
+        title: "Agent finished",
+        body: "Done",
+        data: { serverId: "srv-1", agentId: "agent-1", reason },
+      });
 
-    expect(sent).toBe(true);
-    expect(created).toHaveLength(1);
+      expect(sent).toBe(true);
+      expect(created).toHaveLength(1);
 
-    const clicked = created[0];
-    expect(clicked.clickListeners).toHaveLength(1);
-    clicked.clickListeners[0]?.({} as Event);
+      const clicked = created[0];
+      expect(clicked.clickListeners).toHaveLength(1);
+      clicked.clickListeners[0]?.({} as Event);
 
-    expect(dispatchEvent).toHaveBeenCalledTimes(1);
-    const event = dispatchEvent.mock.calls[0]?.[0] as {
-      type?: string;
-      detail?: { data?: Record<string, unknown> };
-    };
-    expect(event?.type).toBe(WEB_NOTIFICATION_CLICK_EVENT);
-    expect(event?.detail).toEqual({
-      data: { serverId: "srv-1", agentId: "agent-1" },
-    });
-    expect(assign).not.toHaveBeenCalled();
-  });
+      expect(clicked.close).toHaveBeenCalledTimes(1);
+      expect(dispatchEvent).toHaveBeenCalledTimes(1);
+      const event = dispatchEvent.mock.calls[0]?.[0] as {
+        type?: string;
+        detail?: { data?: Record<string, unknown> };
+      };
+      expect(event?.type).toBe(WEB_NOTIFICATION_CLICK_EVENT);
+      expect(event?.detail).toEqual({
+        data: { serverId: "srv-1", agentId: "agent-1", reason },
+      });
+      expect(assign).not.toHaveBeenCalled();
+    },
+  );
 
-  it("falls back to route navigation when no listener handles the click", async () => {
-    const created: MockNotificationInstance[] = [];
+  it.each(["finished", "permission"])(
+    "closes a %s notification before fallback navigation",
+    async (reason) => {
+      const created: MockNotificationInstance[] = [];
 
-    class MockNotification implements MockNotificationInstance {
-      static permission = "granted";
-      static requestPermission = vi.fn(async () => "granted");
-      clickListeners: Array<(event: Event) => void> = [];
-      close = vi.fn();
+      class MockNotification implements MockNotificationInstance {
+        static permission = "granted";
+        static requestPermission = vi.fn(async () => "granted");
+        clickListeners: Array<(event: Event) => void> = [];
+        close = vi.fn();
 
-      constructor(
-        public title: string,
-        public options?: MockNotificationOptions,
-      ) {
-        created.push(this);
-      }
+        constructor(
+          public title: string,
+          public options?: MockNotificationOptions,
+        ) {
+          created.push(this);
+        }
 
-      addEventListener(event: string, listener: (event: Event) => void): void {
-        if (event === "click") {
-          this.clickListeners.push(listener);
+        addEventListener(event: string, listener: (event: Event) => void): void {
+          if (event === "click") {
+            this.clickListeners.push(listener);
+          }
         }
       }
-    }
 
-    const dispatchEvent = vi.fn((event: unknown) => {
-      void event;
-      return true;
-    });
-    const assign = vi.fn();
+      const dispatchEvent = vi.fn((event: unknown) => {
+        void event;
+        return true;
+      });
+      const assign = vi.fn();
 
-    (globalThis as { Notification?: unknown }).Notification = MockNotification;
-    (globalThis as { dispatchEvent?: unknown }).dispatchEvent = dispatchEvent;
-    (globalThis as { location?: unknown }).location = { assign };
+      (globalThis as { Notification?: unknown }).Notification = MockNotification;
+      (globalThis as { dispatchEvent?: unknown }).dispatchEvent = dispatchEvent;
+      (globalThis as { location?: unknown }).location = { assign };
 
-    const { sendOsNotification } = await loadModuleForPlatform("web");
+      const { sendOsNotification } = await loadModuleForPlatform("web");
 
-    await sendOsNotification({
-      title: "Agent finished",
-      data: {
-        serverId: "srv with space",
-        workspaceId: "workspace-1",
-        agentId: "agent/1",
-      },
-    });
+      await sendOsNotification({
+        title: "Agent finished",
+        data: {
+          serverId: "srv with space",
+          workspaceId: "workspace-1",
+          agentId: "agent/1",
+          reason,
+        },
+      });
 
-    const clicked = created[0];
-    expect(clicked.clickListeners).toHaveLength(1);
-    clicked.clickListeners[0]?.({} as Event);
+      const clicked = created[0];
+      expect(clicked.clickListeners).toHaveLength(1);
+      clicked.clickListeners[0]?.({} as Event);
 
-    expect(assign).toHaveBeenCalledWith(
-      "/h/srv%20with%20space/workspace/workspace-1?open=agent%3Aagent%2F1",
-    );
-  });
+      expect(clicked.close).toHaveBeenCalledTimes(1);
+      expect(clicked.close.mock.invocationCallOrder[0]).toBeLessThan(
+        assign.mock.invocationCallOrder[0]!,
+      );
+      expect(assign).toHaveBeenCalledWith(
+        "/h/srv%20with%20space/workspace/workspace-1?open=agent%3Aagent%2F1",
+      );
+    },
+  );
 
   it("returns false when the Notification API is unavailable", async () => {
     (globalThis as { Notification?: unknown }).Notification = undefined;

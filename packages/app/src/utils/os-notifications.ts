@@ -17,6 +17,7 @@ export interface WebNotificationClickDetail {
 }
 
 interface WebNotificationInstance {
+  close: () => void;
   addEventListener: (type: "click", listener: (event: Event) => void) => void;
 }
 
@@ -159,6 +160,7 @@ function attachWebClickHandler(
   data: Record<string, unknown> | undefined,
 ): void {
   notification.addEventListener("click", () => {
+    notification.close();
     const handledByApp = dispatchWebNotificationClick({ data });
     if (!handledByApp) {
       fallbackNavigateToNotificationTarget(data);
