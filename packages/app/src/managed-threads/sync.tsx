@@ -1,3 +1,4 @@
+import { deriveEffectiveWorkspaceStatus } from "@/hooks/sidebar-workspaces-view-model";
 import { resolveScheduleTargets } from "./resolve-targets";
 import { useEffect, useMemo, useState, useRef } from "react";
 import { useShallow } from "zustand/shallow";
@@ -21,6 +22,7 @@ export function ManagedThreadsSync() {
       ids.flatMap((id) => [
         s.sessions[id]?.agents,
         s.sessions[id]?.agentDetails,
+        s.sessions[id]?.workspaceAgentActivity,
         s.sessions[id]?.workspaces,
       ]),
     ),
@@ -107,7 +109,11 @@ export function ManagedThreadsSync() {
       for (const workspace of sessions[serverId]?.workspaces.values() ?? []) {
         const key = threadKey(serverId, workspace.id);
         presentations[key] = presentThread({
-          status: workspace.status,
+          status: deriveEffectiveWorkspaceStatus({
+            serverId,
+            workspace,
+            workspaceAgentActivity: sessions[serverId]?.workspaceAgentActivity,
+          }).status,
           links: links.filter((l) => l.serverId === serverId && l.workspaceId === workspace.id),
           override: overrides[key],
           connection: connections.get(serverId) ?? "connecting",
