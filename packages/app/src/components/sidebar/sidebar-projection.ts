@@ -104,7 +104,11 @@ function buildWorkspaceGroups(
     case "project":
       return [];
     case "responsibility":
-      return managedWorkspaceGroups(unpinnedWorkspaces, input.managedPresentations ?? {});
+      return managedWorkspaceGroups(
+        unpinnedWorkspaces,
+        input.managedPresentations ?? {},
+        input.pinnedWorkspaceOrder,
+      );
     case "status":
       return statusWorkspaceGroups(
         buildStatusGroups(unpinnedWorkspaces, input.projectNamesByViewKey),

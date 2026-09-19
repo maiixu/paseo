@@ -5,6 +5,7 @@ import type { ThreadPresentation } from "./model";
 export function managedWorkspaceGroups(
   rows: readonly SidebarWorkspaceEntry[],
   presentations: Readonly<Record<string, ThreadPresentation>>,
+  pinnedOrder: readonly string[] = [],
 ): SidebarWorkspaceGroup[] {
   const needs: SidebarWorkspaceEntry[] = [],
     managed: SidebarWorkspaceEntry[] = [],
@@ -23,8 +24,14 @@ export function managedWorkspaceGroups(
         : row,
     );
   }
-  conversations.sort((a, b) => Number(!!b.pinnedAt) - Number(!!a.pinnedAt));
-  managed.sort((a, b) => a.name.localeCompare(b.name));
+  const rank = (row: SidebarWorkspaceEntry) => {
+    if (!row.pinnedAt) return pinnedOrder.length + 1;
+    const index = pinnedOrder.indexOf(row.workspaceKey);
+    return index < 0 ? pinnedOrder.length : index;
+  };
+  needs.sort((a, b) => rank(a) - rank(b));
+  conversations.sort((a, b) => rank(a) - rank(b));
+  managed.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
   return [
     {
       key: "responsibility-needs-you",

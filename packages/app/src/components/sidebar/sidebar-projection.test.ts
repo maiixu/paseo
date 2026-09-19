@@ -229,3 +229,30 @@ it("removes the routine finished badge from managed rows without modifying sourc
   expect(result.workspaceGroups[1]?.rows[0]?.statusBucket).toBe("done");
   expect(row.entry.statusBucket).toBe("attention");
 });
+
+it("keeps pins first within responsibility groups without duplicating them", () => {
+  const a = makeWorkspace("A"),
+    b = makeWorkspace("B");
+  b.entry.pinnedAt = "2026-09-19T00:00:00Z";
+  const presentation = {
+    managed: true,
+    group: "managed" as const,
+    state: "waiting" as const,
+    nextRunAt: null,
+    lastRunAt: null,
+    schedules: 1,
+  };
+  const result = buildSidebarProjection({
+    ...projectionInput(),
+    groupMode: "responsibility",
+    workspaceEntriesByKey: new Map([
+      [a.entry.workspaceKey, a.entry],
+      [b.entry.workspaceKey, b.entry],
+    ]),
+    managedPresentations: {
+      [a.entry.workspaceKey]: presentation,
+      [b.entry.workspaceKey]: presentation,
+    },
+  });
+  expect(result.workspaceGroups[1]?.rows.map((r) => r.name)).toEqual(["B", "A"]);
+});
