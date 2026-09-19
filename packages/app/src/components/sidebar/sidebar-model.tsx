@@ -1,3 +1,4 @@
+import { useManagedThreadsStore } from "@/managed-threads/store";
 import React, { createContext, useContext, useEffect, useMemo, type ReactNode } from "react";
 import {
   useSidebarWorkspacesList,
@@ -54,6 +55,7 @@ export function SidebarModelProvider({
   active?: boolean;
   children: ReactNode;
 }) {
+  const managedPresentations = useManagedThreadsStore((s) => s.presentations);
   const list = useSidebarWorkspacesList({ enabled: active });
   const groupMode = useSidebarViewStore((state) => state.groupMode);
   const labelFilter = useSidebarViewStore((state) => state.labelFilter);
@@ -147,6 +149,7 @@ export function SidebarModelProvider({
       workspaceEntriesByKey: filteredWorkspaceEntriesByKey,
       projectNamesByViewKey: list.projectNamesByViewKey,
       groupMode,
+      managedPresentations,
       pinnedCollapsed,
       collapsedProjectKeys,
       collapsedWorkspaceGroupKeys,
@@ -154,6 +157,7 @@ export function SidebarModelProvider({
     [
       collapsedProjectKeys,
       collapsedWorkspaceGroupKeys,
+      managedPresentations,
       groupMode,
       list.projectNamesByViewKey,
       filteredProjects,

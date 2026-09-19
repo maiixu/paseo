@@ -174,3 +174,85 @@ describe("buildSidebarProjection", () => {
     ]);
   });
 });
+
+it("shows each workspace once in responsibility groups, including pinned workspaces", () => {
+  const base = projectionInput();
+  const result = buildSidebarProjection({
+    ...base,
+    groupMode: "responsibility",
+    managedPresentations: {
+      "srv:pinned": {
+        managed: true,
+        group: "managed",
+        state: "waiting",
+        nextRunAt: null,
+        lastRunAt: null,
+        schedules: 1,
+      },
+      "srv:unpinned": {
+        managed: true,
+        group: "needs-you",
+        state: "answer",
+        nextRunAt: null,
+        lastRunAt: null,
+        schedules: 1,
+      },
+    },
+  });
+  expect(result.pinnedGroups.pinnedChats).toEqual([]);
+  expect(result.workspaceGroups.map((g) => g.rows.map((r) => r.workspaceKey))).toEqual([
+    ["srv:unpinned"],
+    ["srv:pinned"],
+    [],
+  ]);
+  expect(result.workspaceGroups.flatMap((g) => g.rows)).toHaveLength(2);
+});
+
+it("removes the routine finished badge from managed rows without modifying source state", () => {
+  const row = makeWorkspace("bot", "attention");
+  const base = projectionInput();
+  const result = buildSidebarProjection({
+    ...base,
+    groupMode: "responsibility",
+    workspaceEntriesByKey: new Map([[row.entry.workspaceKey, row.entry]]),
+    managedPresentations: {
+      [row.entry.workspaceKey]: {
+        managed: true,
+        group: "managed",
+        state: "waiting",
+        nextRunAt: null,
+        lastRunAt: null,
+        schedules: 1,
+      },
+    },
+  });
+  expect(result.workspaceGroups[1]?.rows[0]?.statusBucket).toBe("done");
+  expect(row.entry.statusBucket).toBe("attention");
+});
+
+it("keeps pins first within responsibility groups without duplicating them", () => {
+  const a = makeWorkspace("A"),
+    b = makeWorkspace("B");
+  b.entry.pinnedAt = "2026-09-19T00:00:00Z";
+  const presentation = {
+    managed: true,
+    group: "managed" as const,
+    state: "waiting" as const,
+    nextRunAt: null,
+    lastRunAt: null,
+    schedules: 1,
+  };
+  const result = buildSidebarProjection({
+    ...projectionInput(),
+    groupMode: "responsibility",
+    workspaceEntriesByKey: new Map([
+      [a.entry.workspaceKey, a.entry],
+      [b.entry.workspaceKey, b.entry],
+    ]),
+    managedPresentations: {
+      [a.entry.workspaceKey]: presentation,
+      [b.entry.workspaceKey]: presentation,
+    },
+  });
+  expect(result.workspaceGroups[1]?.rows.map((r) => r.name)).toEqual(["B", "A"]);
+});

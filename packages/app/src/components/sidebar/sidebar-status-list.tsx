@@ -32,6 +32,8 @@ import type { Theme } from "@/styles/theme";
 import type { SidebarSurfaceBackdrop } from "@/styles/surface-backdrop";
 import { withUnistyles } from "react-native-unistyles";
 import {
+  Bot,
+  MessagesSquare,
   ChevronDown,
   ChevronRight,
   CircleAlert,
@@ -99,6 +101,8 @@ const runningColorMapping = (theme: Theme) => ({
   color: getStatusDotColor({ theme, bucket: "running" }) ?? undefined,
 });
 
+const ThemedBot = withUnistyles(Bot);
+const ThemedMessagesSquare = withUnistyles(MessagesSquare);
 const ThemedChevronDown = withUnistyles(ChevronDown);
 const ThemedChevronRight = withUnistyles(ChevronRight);
 const ThemedCircleAlert = withUnistyles(CircleAlert);
@@ -465,6 +469,10 @@ function StatusGroupLeadingVisual({
   showChevron: boolean;
 }) {
   if (!showChevron) {
+    if (leading.kind === "managed")
+      return <ThemedBot size={14} uniProps={foregroundMutedColorMapping} />;
+    if (leading.kind === "conversation")
+      return <ThemedMessagesSquare size={14} uniProps={foregroundMutedColorMapping} />;
     return <StatusGroupIcon bucket={leading.bucket} />;
   }
   if (collapsed) {

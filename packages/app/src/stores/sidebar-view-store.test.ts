@@ -289,3 +289,14 @@ describe("sidebar view store", () => {
     expect(storage.reads).toEqual(["sidebar-view"]);
   });
 });
+
+it("preserves the responsibility grouping preference through hydration", () => {
+  expect(
+    migrateSidebarViewState({
+      groupMode: "responsibility",
+      hostFilters: ["cloud"],
+      projectFilters: [],
+      labelFilter: { labels: [] },
+    }),
+  ).toMatchObject({ groupMode: "responsibility", hostFilters: ["cloud"] });
+});
