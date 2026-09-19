@@ -88,6 +88,7 @@ import { UpdateCalloutSource } from "@/desktop/updates/update-callout-source";
 import { useActiveWorktreeNewAction } from "@/hooks/use-active-worktree-new-action";
 import { useGlobalNewWorkspaceAction } from "@/hooks/use-global-new-workspace-action";
 import { useLatchedBoolean } from "@/hooks/use-latched-boolean";
+import { ManagedThreadsSync } from "@/managed-threads/sync";
 import { FaviconStatus } from "@/hooks/use-favicon-status";
 import { BrowserFeedbackSync } from "@/browser-feedback/browser-feedback-sync";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
@@ -686,6 +687,7 @@ function ProvidersWrapper({ children }: { children: ReactNode }) {
         <HostSessionManager />
         <FaviconStatus />
         <BrowserFeedbackSync />
+        <ManagedThreadsSync />
         {children}
       </VoiceProvider>
     </AppearanceProvider>

@@ -174,3 +174,58 @@ describe("buildSidebarProjection", () => {
     ]);
   });
 });
+
+it("shows each workspace once in responsibility groups, including pinned workspaces", () => {
+  const base = projectionInput();
+  const result = buildSidebarProjection({
+    ...base,
+    groupMode: "responsibility",
+    managedPresentations: {
+      "srv:pinned": {
+        managed: true,
+        group: "managed",
+        state: "waiting",
+        nextRunAt: null,
+        lastRunAt: null,
+        schedules: 1,
+      },
+      "srv:unpinned": {
+        managed: true,
+        group: "needs-you",
+        state: "answer",
+        nextRunAt: null,
+        lastRunAt: null,
+        schedules: 1,
+      },
+    },
+  });
+  expect(result.pinnedGroups.pinnedChats).toEqual([]);
+  expect(result.workspaceGroups.map((g) => g.rows.map((r) => r.workspaceKey))).toEqual([
+    ["srv:unpinned"],
+    ["srv:pinned"],
+    [],
+  ]);
+  expect(result.workspaceGroups.flatMap((g) => g.rows)).toHaveLength(2);
+});
+
+it("removes the routine finished badge from managed rows without modifying source state", () => {
+  const row = makeWorkspace("bot", "attention");
+  const base = projectionInput();
+  const result = buildSidebarProjection({
+    ...base,
+    groupMode: "responsibility",
+    workspaceEntriesByKey: new Map([[row.entry.workspaceKey, row.entry]]),
+    managedPresentations: {
+      [row.entry.workspaceKey]: {
+        managed: true,
+        group: "managed",
+        state: "waiting",
+        nextRunAt: null,
+        lastRunAt: null,
+        schedules: 1,
+      },
+    },
+  });
+  expect(result.workspaceGroups[1]?.rows[0]?.statusBucket).toBe("done");
+  expect(row.entry.statusBucket).toBe("attention");
+});

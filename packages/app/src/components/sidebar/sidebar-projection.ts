@@ -1,3 +1,5 @@
+import { managedWorkspaceGroups } from "@/managed-threads/grouping";
+import type { ThreadPresentation } from "@/managed-threads/model";
 import { buildStatusGroups } from "@/hooks/sidebar-status-view-model";
 import {
   splitPinnedSidebarGroups,
@@ -42,6 +44,7 @@ export interface SidebarProjectionInput {
   workspaceEntriesByKey: ReadonlyMap<string, SidebarWorkspaceEntry>;
   projectNamesByViewKey: Map<string, string>;
   groupMode: SidebarGroupMode;
+  managedPresentations?: Readonly<Record<string, ThreadPresentation>>;
   pinnedCollapsed: boolean;
   collapsedProjectKeys: ReadonlySet<string>;
   collapsedWorkspaceGroupKeys: ReadonlySet<string>;
@@ -53,9 +56,11 @@ export function buildSidebarProjection(input: SidebarProjectionInput): SidebarPr
     keys: input.pinnedKeys,
     pinnedWorkspaceOrder: input.pinnedWorkspaceOrder,
   });
+  if (input.groupMode === "responsibility") pinnedGroups.pinnedChats = [];
   const pinnedWorkspaceKeys = new Set(input.pinnedKeys.pinnedWorkspaceKeys);
   const unpinnedWorkspaces = Array.from(input.workspaceEntriesByKey.values()).filter(
-    (workspace) => !pinnedWorkspaceKeys.has(workspace.workspaceKey),
+    (workspace) =>
+      input.groupMode === "responsibility" || !pinnedWorkspaceKeys.has(workspace.workspaceKey),
   );
   // One switch decides both what the list groups by and what the keyboard shortcuts walk, so the
   // two cannot disagree and a new grouping mode is a compile error here rather than a silent
@@ -98,6 +103,8 @@ function buildWorkspaceGroups(
   switch (input.groupMode) {
     case "project":
       return [];
+    case "responsibility":
+      return managedWorkspaceGroups(unpinnedWorkspaces, input.managedPresentations ?? {});
     case "status":
       return statusWorkspaceGroups(
         buildStatusGroups(unpinnedWorkspaces, input.projectNamesByViewKey),

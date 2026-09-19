@@ -1,4 +1,11 @@
-import { useMemo, type ComponentProps, type PropsWithChildren, type ReactNode } from "react";
+import { useManagedThreadsStore } from "@/managed-threads/store";
+import {
+  useCallback,
+  useMemo,
+  type ComponentProps,
+  type PropsWithChildren,
+  type ReactNode,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { type PressableStateCallbackType } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
@@ -147,6 +154,14 @@ function SidebarWorkspaceMenuItems({
   openInFileManagerPath,
 }: SidebarWorkspaceMenuItemsProps & { surface: MenuSurface }): ReactNode {
   const { t } = useTranslation();
+  const managed = useManagedThreadsStore(
+    (s) => s.presentations[workspaceKey]?.managed ?? s.overrides[workspaceKey] ?? false,
+  );
+  const setManaged = useManagedThreadsStore((s) => s.setOverride);
+  const toggleManaged = useCallback(
+    () => setManaged(workspaceKey, !managed),
+    [setManaged, workspaceKey, managed],
+  );
   const archiveTrailing = useMemo(
     () => (archiveShortcutKeys ? <Shortcut chord={archiveShortcutKeys} /> : null),
     [archiveShortcutKeys],
@@ -158,6 +173,13 @@ function SidebarWorkspaceMenuItems({
 
   return (
     <>
+      <WorkspaceMenuItem
+        surface={surface}
+        testID={`sidebar-workspace-menu-managed-${workspaceKey}`}
+        onSelect={toggleManaged}
+      >
+        {managed ? "Move to My conversations" : "Move to Bot managed"}
+      </WorkspaceMenuItem>
       {onCopyPath ? (
         <WorkspaceMenuItem
           surface={surface}
