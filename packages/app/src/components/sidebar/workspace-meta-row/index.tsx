@@ -1,3 +1,4 @@
+import { getThemedProviderIcon } from "@/components/provider-icons";
 import { Fragment, useCallback, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Pressable, Text, View, type GestureResponderEvent } from "react-native";
@@ -67,6 +68,8 @@ export function WorkspaceMetaRow({
   prHint,
   serviceSummary,
   labels = EMPTY_LABELS,
+  provider = null,
+  serverId,
 }: {
   currentBranch: string | null;
   projectName: string | null;
@@ -74,6 +77,8 @@ export function WorkspaceMetaRow({
   prHint: PrHint | null;
   serviceSummary: WorkspaceServiceSummary | null;
   labels?: readonly WorkspaceLabelDefinition[];
+  provider?: string | null;
+  serverId?: string;
 }) {
   const { rowItems, checksDisplay } = useSidebarMetaPreferences();
   const items = selectMetaRowItems({
@@ -87,13 +92,20 @@ export function WorkspaceMetaRow({
     checksDisplay,
   });
 
-  if (items.length === 0) return null;
+  if (items.length === 0 && !provider) return null;
+  const ProviderIcon = provider ? getThemedProviderIcon(provider, serverId) : null;
 
   return (
     <View style={styles.row}>
+      {ProviderIcon ? (
+        <View style={styles.identityItem} accessibilityLabel={`Provider: ${provider}`}>
+          <ProviderIcon size={META_ICON_SIZE} uniProps={mutedMapping} />
+          <Text style={styles.identityText}>{provider}</Text>
+        </View>
+      ) : null}
       {items.map((item, index) => (
         <Fragment key={item.kind}>
-          {index > 0 ? <Text style={styles.separator}>·</Text> : null}
+          {index > 0 || provider ? <Text style={styles.separator}>·</Text> : null}
           <MetaItemNode item={item} hostBadge={hostBadge} leading={index === 0} />
         </Fragment>
       ))}

@@ -1,8 +1,15 @@
 # Managed threads in the sidebar
 
 The Responsibility grouping separates Needs you, Bot managed and My conversations.
-A workspace appears once, including pinned workspaces. Pins remain stored and are
-still editable; this grouping does not render a second Pinned list.
+Pinned remains a separate shortcut section. Pinned workspaces also appear in their
+responsibility group so a pinned question cannot disappear from Needs you. Keyboard
+navigation deduplicates these references, including when either section is collapsed.
+
+Sidebar provider metadata comes from the latest root agent activity, never from tags.
+The historical exact labels review/codex/claude/bedrock are omitted from row chips;
+they remain stored and editable in Labels. Other topic labels are unchanged. Live
+attention indicators and responsibility groups own status. Missing agent data leaves
+provider metadata absent instead of guessing it from an old label.
 
 Same-agent schedules identify managed work automatically. New-agent schedules do
 not: a periodic report can create ordinary conversations without making each a

@@ -1,4 +1,7 @@
-import type { WorkspaceLabelDefinition } from "@getpaseo/protocol/workspace-labels";
+import {
+  workspaceLabelKey,
+  type WorkspaceLabelDefinition,
+} from "@getpaseo/protocol/workspace-labels";
 import type { PrHint } from "@/git/pr-hint";
 import type { SidebarChecksDisplay } from "@/components/sidebar/display-preferences/checks-display";
 import type { SidebarRowItems } from "@/components/sidebar/display-preferences/row-items";
@@ -89,4 +92,11 @@ export function selectMetaRowItems(input: {
   }
 
   return items;
+}
+
+// Historical operational tags remain editable in Labels, but are not live status.
+// Keep this exact allowlist narrow so user topic labels are never guessed away.
+const LEGACY_OPERATIONAL_LABELS = new Set(["review", "codex", "claude", "bedrock"]);
+export function selectTopicLabels(labels: readonly WorkspaceLabelDefinition[]) {
+  return labels.filter((label) => !LEGACY_OPERATIONAL_LABELS.has(workspaceLabelKey(label.name)));
 }
