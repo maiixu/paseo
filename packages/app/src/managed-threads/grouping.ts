@@ -6,6 +6,7 @@ export function managedWorkspaceGroups(
   rows: readonly SidebarWorkspaceEntry[],
   presentations: Readonly<Record<string, ThreadPresentation>>,
   pinnedOrder: readonly string[] = [],
+  orders: Readonly<Record<string, readonly string[]>> = {},
 ): SidebarWorkspaceGroup[] {
   const needs: SidebarWorkspaceEntry[] = [],
     pinned: SidebarWorkspaceEntry[] = [],
@@ -63,5 +64,15 @@ export function managedWorkspaceGroups(
       leading: { kind: "conversation" },
     },
   ];
+  for (const group of groups) {
+    const order = orders[group.key];
+    if (!order || group.leading.kind === "pinned") continue;
+    const groupRank = new Map(order.map((key, index) => [key, index]));
+    group.rows.sort(
+      (a, b) =>
+        (groupRank.get(a.workspaceKey) ?? order.length) -
+        (groupRank.get(b.workspaceKey) ?? order.length),
+    );
+  }
   return groups.filter((group) => group.rows.length > 0);
 }

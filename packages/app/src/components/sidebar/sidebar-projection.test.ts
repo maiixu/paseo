@@ -256,3 +256,34 @@ it("retains stored pin order and separates unpinned conversations", () => {
   expect(rowsOf(result, "conversations").map((r) => r.name)).toEqual(["C"]);
   expect(result.workspaceGroups.map((g) => g.label)).toEqual(["Pinned · 2", "Conversations · 1"]);
 });
+
+it("applies local group order without moving conversations across responsibility boundaries", () => {
+  const a = makeWorkspace("A"),
+    b = makeWorkspace("B"),
+    c = makeWorkspace("C", "needs_input");
+  const base = {
+    ...projectionInput(),
+    groupMode: "responsibility" as const,
+    workspaceEntriesByKey: new Map([a, b, c].map((x) => [x.entry.workspaceKey, x.entry])),
+    responsibilityOrder: {
+      "responsibility-conversations": [
+        c.entry.workspaceKey,
+        b.entry.workspaceKey,
+        a.entry.workspaceKey,
+      ],
+    },
+  };
+  const result = buildSidebarProjection(base);
+  expect(rowsOf(result, "conversations").map((r) => r.name)).toEqual(["B", "A"]);
+  expect(rowsOf(result, "needs-you").map((r) => r.name)).toEqual(["C"]);
+  expect(result.shortcutModel.shortcutTargets.map((r) => r.workspaceId)).toEqual(["C", "B", "A"]);
+  const filtered = buildSidebarProjection({
+    ...base,
+    workspaceEntriesByKey: new Map([[a.entry.workspaceKey, a.entry]]),
+  });
+  expect(rowsOf(filtered, "conversations").map((r) => r.name)).toEqual(["A"]);
+  expect(rowsOf(buildSidebarProjection(base), "conversations").map((r) => r.name)).toEqual([
+    "B",
+    "A",
+  ]);
+});

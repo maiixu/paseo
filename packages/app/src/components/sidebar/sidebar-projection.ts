@@ -44,6 +44,7 @@ export interface SidebarProjectionInput {
   workspaceEntriesByKey: ReadonlyMap<string, SidebarWorkspaceEntry>;
   projectNamesByViewKey: Map<string, string>;
   groupMode: SidebarGroupMode;
+  responsibilityOrder?: Readonly<Record<string, readonly string[]>>;
   managedPresentations?: Readonly<Record<string, ThreadPresentation>>;
   pinnedCollapsed: boolean;
   collapsedProjectKeys: ReadonlySet<string>;
@@ -111,6 +112,7 @@ function buildWorkspaceGroups(
         })),
         input.managedPresentations ?? {},
         input.pinnedWorkspaceOrder,
+        input.responsibilityOrder,
       );
     case "status":
       return statusWorkspaceGroups(

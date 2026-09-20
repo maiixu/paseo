@@ -4,7 +4,9 @@ Responsibility view has four peer collapsible groups: Needs you, Pinned, Bot man
 and Conversations. Empty groups are hidden. Every workspace appears exactly once:
 attention takes priority, then pinning, then management, then ordinary conversation.
 A pinned question keeps a pin glyph in Needs you and returns to Pinned when resolved.
-Pinned managed threads retain their next-check metadata. The static Workspaces title
+Pinned managed threads retain their next-check metadata. Every group supports drag
+reordering within the group. Local order persists across refresh and filtering;
+state transitions still determine group membership, so dragging cannot hide a question. The static Workspaces title
 is omitted; the display-preferences control remains available. All four headings use
 the same persistent collapse control and always-visible chevron.
 
