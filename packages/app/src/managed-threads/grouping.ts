@@ -8,6 +8,7 @@ export function managedWorkspaceGroups(
   pinnedOrder: readonly string[] = [],
 ): SidebarWorkspaceGroup[] {
   const needs: SidebarWorkspaceEntry[] = [],
+    pinned: SidebarWorkspaceEntry[] = [],
     managed: SidebarWorkspaceEntry[] = [],
     conversations: SidebarWorkspaceEntry[] = [];
   for (const row of rows) {
@@ -17,7 +18,10 @@ export function managedWorkspaceGroups(
       (["needs_input", "failed", "attention"].includes(row.statusBucket)
         ? "needs-you"
         : "conversations");
-    const destination = { "needs-you": needs, managed, conversations }[group];
+    let destination = conversations;
+    if (group === "needs-you") destination = needs;
+    else if (row.pinnedAt) destination = pinned;
+    else if (group === "managed") destination = managed;
     destination.push(
       p?.managed && p.state !== "ended" && row.statusBucket === "attention"
         ? { ...row, statusBucket: "done" }
@@ -30,14 +34,21 @@ export function managedWorkspaceGroups(
     return index < 0 ? pinnedOrder.length : index;
   };
   needs.sort((a, b) => rank(a) - rank(b));
+  pinned.sort((a, b) => rank(a) - rank(b));
   conversations.sort((a, b) => rank(a) - rank(b));
   managed.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
-  return [
+  const groups: SidebarWorkspaceGroup[] = [
     {
       key: "responsibility-needs-you",
       label: `Needs you · ${needs.length}`,
       rows: needs,
       leading: { kind: "status", bucket: "needs_input" },
+    },
+    {
+      key: "responsibility-pinned",
+      label: `Pinned · ${pinned.length}`,
+      rows: pinned,
+      leading: { kind: "pinned" },
     },
     {
       key: "responsibility-managed",
@@ -47,9 +58,10 @@ export function managedWorkspaceGroups(
     },
     {
       key: "responsibility-conversations",
-      label: `My conversations · ${conversations.length}`,
+      label: `Conversations · ${conversations.length}`,
       rows: conversations,
       leading: { kind: "conversation" },
     },
   ];
+  return groups.filter((group) => group.rows.length > 0);
 }

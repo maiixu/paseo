@@ -801,9 +801,10 @@ function DesktopSidebar({
 }
 
 function WorkspacesSectionHeader() {
+  const responsibility = useSidebarViewStore((state) => state.groupMode === "responsibility");
   return (
     <View style={styles.workspacesSectionHeader}>
-      <Text style={styles.workspacesSectionTitle}>Workspaces</Text>
+      {responsibility ? <View /> : <Text style={styles.workspacesSectionTitle}>Workspaces</Text>}
       <View style={styles.workspacesSectionActions}>
         <Tooltip delayDuration={300}>
           <TooltipTrigger asChild>

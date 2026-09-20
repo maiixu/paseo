@@ -1,9 +1,12 @@
 # Managed threads in the sidebar
 
-The Responsibility grouping separates Needs you, Bot managed and My conversations.
-Pinned remains a separate shortcut section. Pinned workspaces also appear in their
-responsibility group so a pinned question cannot disappear from Needs you. Keyboard
-navigation deduplicates these references, including when either section is collapsed.
+Responsibility view has four peer collapsible groups: Needs you, Pinned, Bot managed,
+and Conversations. Empty groups are hidden. Every workspace appears exactly once:
+attention takes priority, then pinning, then management, then ordinary conversation.
+A pinned question keeps a pin glyph in Needs you and returns to Pinned when resolved.
+Pinned managed threads retain their next-check metadata. The static Workspaces title
+is omitted; the display-preferences control remains available. All four headings use
+the same persistent collapse control and always-visible chevron.
 
 Sidebar provider metadata comes from the latest root agent activity, never from tags.
 The historical exact labels review/codex/claude/bedrock are omitted from row chips;
