@@ -287,3 +287,36 @@ it("applies local group order without moving conversations across responsibility
     "A",
   ]);
 });
+
+it("places new conversations before saved drag order and preserves that order through filtering", () => {
+  const a = makeWorkspace("A"),
+    b = makeWorkspace("B"),
+    fresh = makeWorkspace("New");
+  const base = {
+    ...projectionInput(),
+    groupMode: "responsibility" as const,
+    workspaceEntriesByKey: new Map([fresh, a, b].map((x) => [x.entry.workspaceKey, x.entry])),
+    responsibilityOrder: {
+      "responsibility-conversations": [b.entry.workspaceKey, a.entry.workspaceKey],
+    },
+  };
+  expect(rowsOf(buildSidebarProjection(base), "conversations").map((r) => r.name)).toEqual([
+    "New",
+    "B",
+    "A",
+  ]);
+  expect(
+    rowsOf(
+      buildSidebarProjection({
+        ...base,
+        workspaceEntriesByKey: new Map([fresh, a].map((x) => [x.entry.workspaceKey, x.entry])),
+      }),
+      "conversations",
+    ).map((r) => r.name),
+  ).toEqual(["New", "A"]);
+  expect(rowsOf(buildSidebarProjection(base), "conversations").map((r) => r.name)).toEqual([
+    "New",
+    "B",
+    "A",
+  ]);
+});

@@ -67,11 +67,10 @@ export function managedWorkspaceGroups(
   for (const group of groups) {
     const order = orders[group.key];
     if (!order || group.leading.kind === "pinned") continue;
+    // Newly visible conversations lead the saved order; existing rows keep their drag positions.
     const groupRank = new Map(order.map((key, index) => [key, index]));
     group.rows.sort(
-      (a, b) =>
-        (groupRank.get(a.workspaceKey) ?? order.length) -
-        (groupRank.get(b.workspaceKey) ?? order.length),
+      (a, b) => (groupRank.get(a.workspaceKey) ?? -1) - (groupRank.get(b.workspaceKey) ?? -1),
     );
   }
   return groups.filter((group) => group.rows.length > 0);
