@@ -1,3 +1,4 @@
+import { useResponsibilityOrderStore } from "@/managed-threads/order";
 import { useManagedThreadsStore } from "@/managed-threads/store";
 import React, { createContext, useContext, useEffect, useMemo, type ReactNode } from "react";
 import {
@@ -141,6 +142,7 @@ export function SidebarModelProvider({
     visibleWorkspaceKeys,
   ]);
   const pinnedKeys = usePinnedSidebarKeys(filteredProjects);
+  const responsibilityOrder = useResponsibilityOrderStore((state) => state.orders);
   const projectionInput = useMemo(
     () => ({
       projects: filteredProjects,
@@ -150,6 +152,7 @@ export function SidebarModelProvider({
       projectNamesByViewKey: list.projectNamesByViewKey,
       groupMode,
       managedPresentations,
+      responsibilityOrder,
       pinnedCollapsed,
       collapsedProjectKeys,
       collapsedWorkspaceGroupKeys,
@@ -158,6 +161,7 @@ export function SidebarModelProvider({
       collapsedProjectKeys,
       collapsedWorkspaceGroupKeys,
       managedPresentations,
+      responsibilityOrder,
       groupMode,
       list.projectNamesByViewKey,
       filteredProjects,

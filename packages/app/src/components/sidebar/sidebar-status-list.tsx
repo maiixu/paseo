@@ -1,3 +1,4 @@
+import { useResponsibilityOrderStore } from "@/managed-threads/order";
 import {
   memo,
   useCallback,
@@ -364,6 +365,19 @@ function StatusGroupRows({
     toggleExpanded: toggleWorkspacesExpanded,
   } = useLimitedSidebarGroup(group.rows);
 
+  const reorder = useResponsibilityOrderStore((state) => state.reorder);
+  const handleReorder = useCallback(
+    (rows: SidebarWorkspaceEntry[]) => {
+      if (group.leading.kind === "pinned") onPinnedWorkspaceReorder(rows);
+      else
+        reorder(
+          group.key,
+          rows.map((row) => row.workspaceKey),
+        );
+    },
+    [group.key, group.leading.kind, onPinnedWorkspaceReorder, reorder],
+  );
+
   const renderWorkspace = useCallback(
     ({
       item: workspace,
@@ -414,13 +428,13 @@ function StatusGroupRows({
           style={styles.statusWorkspaceListContainer}
           testID={`sidebar-status-group-rows-${group.key}`}
         >
-          {group.leading.kind === "pinned" ? (
+          {group.key.startsWith("responsibility-") ? (
             <DraggableList
-              testID="sidebar-responsibility-pinned-list"
+              testID={`sidebar-draggable-${group.key}`}
               data={visibleWorkspaces}
               keyExtractor={statusWorkspaceKeyExtractor}
               renderItem={renderWorkspace}
-              onDragEnd={onPinnedWorkspaceReorder}
+              onDragEnd={handleReorder}
               scrollEnabled={false}
               useDragHandle
               nestable={platformIsNative}
