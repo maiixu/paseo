@@ -7,7 +7,8 @@ import { createValidatedPersistStorage } from "@/storage/validated-persist-stora
 
 export type SidebarGroupMode = "project" | "status" | "responsibility";
 
-const SIDEBAR_VIEW_STORAGE_KEY = "sidebar-view";
+export const SIDEBAR_VIEW_STORAGE_KEY = "sidebar-view-responsibility-v1";
+const PREVIOUS_SIDEBAR_VIEW_STORAGE_KEY = "sidebar-view";
 const LEGACY_SIDEBAR_GROUP_MODE_STORAGE_KEY = "sidebar-group-mode";
 const SIDEBAR_VIEW_STORE_VERSION = 6;
 
@@ -168,10 +169,28 @@ export function createSidebarViewStorage(
   return {
     getItem: async (name) => {
       const value = await backingStorage.getItem(name);
-      if (value !== null || name !== SIDEBAR_VIEW_STORAGE_KEY) {
-        return value;
+      if (value !== null) return value;
+      if (name === PREVIOUS_SIDEBAR_VIEW_STORAGE_KEY) {
+        return backingStorage.getItem(LEGACY_SIDEBAR_GROUP_MODE_STORAGE_KEY);
       }
-      return backingStorage.getItem(LEGACY_SIDEBAR_GROUP_MODE_STORAGE_KEY);
+      if (name !== SIDEBAR_VIEW_STORAGE_KEY) return null;
+      const previous =
+        (await backingStorage.getItem(PREVIOUS_SIDEBAR_VIEW_STORAGE_KEY)) ??
+        (await backingStorage.getItem(LEGACY_SIDEBAR_GROUP_MODE_STORAGE_KEY));
+      let state: unknown;
+      try {
+        state = previous ? JSON.parse(previous).state : undefined;
+      } catch {
+        state = undefined;
+      }
+      const migrated = JSON.stringify({
+        state: { ...migrateSidebarViewState(state), groupMode: "responsibility" },
+        version: SIDEBAR_VIEW_STORE_VERSION,
+      });
+      // Commit adoption immediately. Old tabs still write the old key, so they
+      // cannot reset a fresh Hub or overwrite an explicit choice made here.
+      await backingStorage.setItem(name, migrated);
+      return migrated;
     },
     setItem: (name, value) => backingStorage.setItem(name, value),
     removeItem: (name) => backingStorage.removeItem(name),
@@ -181,7 +200,7 @@ export function createSidebarViewStorage(
 export const useSidebarViewStore = create<SidebarViewStoreState>()(
   persist(
     (set) => ({
-      groupMode: "project",
+      groupMode: "responsibility",
       hostFilters: [],
       projectFilters: [],
       labelFilter: emptyLabelFilter(),

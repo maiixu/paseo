@@ -1,3 +1,5 @@
+import { useSidebarViewStore } from "@/stores/sidebar-view-store";
+import { subscribeSidebarViewChanges } from "@/stores/sidebar-view-sync";
 import { deriveEffectiveWorkspaceStatus } from "@/hooks/sidebar-workspaces-view-model";
 import { resolveScheduleTargets } from "./resolve-targets";
 import { useEffect, useMemo, useState, useRef } from "react";
@@ -13,6 +15,10 @@ import { useManagedThreadsStore } from "./store";
 import { mergeManagedLinks, presentThread, threadKey, type ThreadPresentation } from "./model";
 
 export function ManagedThreadsSync() {
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    return subscribeSidebarViewChanges(window, useSidebarViewStore.persist.rehydrate);
+  }, []);
   const hosts = useHosts();
   const pendingReads = useRef(new Map<string, Promise<string | null>>());
   const ids = useMemo(() => hosts.map((h) => h.serverId), [hosts]);
