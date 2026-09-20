@@ -175,7 +175,7 @@ describe("buildSidebarProjection", () => {
   });
 });
 
-it("shows each workspace once in responsibility groups, including pinned workspaces", () => {
+it("retains Pinned shortcuts and each workspace in its responsibility group", () => {
   const base = projectionInput();
   const result = buildSidebarProjection({
     ...base,
@@ -199,7 +199,11 @@ it("shows each workspace once in responsibility groups, including pinned workspa
       },
     },
   });
-  expect(result.pinnedGroups.pinnedChats).toEqual([]);
+  expect(result.pinnedGroups.pinnedChats.map((r) => r.workspaceKey)).toEqual(["srv:pinned"]);
+  expect(result.shortcutModel.shortcutTargets).toEqual([
+    { serverId: "srv", workspaceId: "pinned" },
+    { serverId: "srv", workspaceId: "unpinned" },
+  ]);
   expect(result.workspaceGroups.map((g) => g.rows.map((r) => r.workspaceKey))).toEqual([
     ["srv:unpinned"],
     ["srv:pinned"],
@@ -255,4 +259,26 @@ it("keeps pins first within responsibility groups without duplicating them", () 
     },
   });
   expect(result.workspaceGroups[1]?.rows.map((r) => r.name)).toEqual(["B", "A"]);
+});
+
+it("keeps pinned questions in Needs you when Pinned is collapsed", () => {
+  const base = projectionInput({ pinnedCollapsed: true });
+  const result = buildSidebarProjection({
+    ...base,
+    groupMode: "responsibility",
+    managedPresentations: {
+      "srv:pinned": {
+        managed: true,
+        group: "needs-you",
+        state: "answer",
+        nextRunAt: null,
+        lastRunAt: null,
+        schedules: 1,
+      },
+    },
+  });
+  expect(result.workspaceGroups[0]?.rows.map((r) => r.workspaceKey)).toContain("srv:pinned");
+  expect(
+    result.shortcutModel.shortcutTargets.filter((r) => r.workspaceId === "pinned"),
+  ).toHaveLength(1);
 });

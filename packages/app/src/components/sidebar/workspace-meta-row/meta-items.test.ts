@@ -3,7 +3,7 @@ import type { WorkspaceLabelDefinition } from "@getpaseo/protocol/workspace-labe
 import type { PrHint } from "@/git/pr-hint";
 import { DEFAULT_SIDEBAR_CHECKS_DISPLAY } from "@/components/sidebar/display-preferences/checks-display";
 import { DEFAULT_SIDEBAR_ROW_ITEMS } from "@/components/sidebar/display-preferences/row-items";
-import { selectMetaRowItems } from "./meta-items";
+import { selectMetaRowItems, selectTopicLabels } from "./meta-items";
 import type { WorkspaceServiceSummary } from "./service-summary";
 
 const PR_HINT: PrHint = {
@@ -142,4 +142,13 @@ describe("selectMetaRowItems", () => {
     const items = select({ prHint: { ...PR_HINT, checksStatus: undefined } });
     expect(kinds(items)).toEqual(["host", "changeRequest", "services", "labels"]);
   });
+});
+
+it("hides only legacy operational chips without deleting labels or matching topics loosely", () => {
+  const labels = ["review", "Codex", "claude", "bedrock", "Book review", "finance"].map((name) => ({
+    name,
+    color: "blue" as const,
+  }));
+  expect(selectTopicLabels(labels).map((l) => l.name)).toEqual(["Book review", "finance"]);
+  expect(labels).toHaveLength(6);
 });

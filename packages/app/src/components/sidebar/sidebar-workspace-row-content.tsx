@@ -1,3 +1,5 @@
+import { useSessionStore } from "@/stores/session-store";
+import { selectTopicLabels } from "./workspace-meta-row/meta-items";
 import { ManagedThreadMeta } from "@/managed-threads/components";
 import { memo, useMemo, useCallback, useState, type ReactNode } from "react";
 import { Text, View, type ViewStyle } from "react-native";
@@ -127,6 +129,11 @@ export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowConte
   // The workspace carries label names; their colors live in its host's catalog, so the row is
   // where the two meet — the meta line is handed finished definitions.
   const labels = useWorkspaceLabelDefinitions(workspace.serverId, workspace.labels);
+  const provider = useSessionStore((state) => {
+    const session = state.sessions[workspace.serverId];
+    const id = session?.workspaceAgentActivity.get(workspace.workspaceId)?.agentId;
+    return id ? (session?.agents.get(id)?.provider ?? null) : null;
+  });
   const workspaceBranchTextStyle = useMemo(
     () => [
       styles.workspaceBranchText,
@@ -171,7 +178,9 @@ export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowConte
             hostBadge={hostBadge ?? null}
             prHint={workspace.prHint}
             serviceSummary={serviceSummary}
-            labels={labels}
+            labels={selectTopicLabels(labels)}
+            provider={provider}
+            serverId={workspace.serverId}
           />
         </View>
       </View>
