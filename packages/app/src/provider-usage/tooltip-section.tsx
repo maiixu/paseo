@@ -1,5 +1,6 @@
 import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
+import { ProviderAccountUsage } from "./accounts";
 import { ProviderUsageCard } from "./card";
 import { providerUsageCopy } from "./copy";
 import type { ProviderUsage, ProviderUsageView } from "./types";
@@ -47,7 +48,12 @@ export function ProviderUsageTooltipSection({
   return (
     <>
       <View style={styles.divider} />
-      <ProviderUsageCard usage={usage} compact />
+      {view.refreshError ? <Text style={styles.error}>{view.refreshError}</Text> : null}
+      {usage.accounts ? (
+        <ProviderAccountUsage usage={usage} routing={view.payload.accountRouting} />
+      ) : (
+        <ProviderUsageCard usage={usage} compact />
+      )}
     </>
   );
 }

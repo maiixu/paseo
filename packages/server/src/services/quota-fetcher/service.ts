@@ -1,4 +1,6 @@
 import type { Logger } from "pino";
+import { AccountRouterUsage } from "./account-router.js";
+import type { ProviderUsageListResponseMessage } from "../../server/messages.js";
 import type { ProviderUsage } from "../../server/messages.js";
 import { createProviderUsageFetchers } from "./manifest.js";
 import type { ProviderApiFetch, ProviderUsageFetcher } from "./provider.js";
@@ -10,17 +12,20 @@ export interface ProviderUsageServiceOptions {
   fetch?: ProviderApiFetch;
   cacheTtlMs?: number;
   now?: () => number;
+  accountRouter?: ConstructorParameters<typeof AccountRouterUsage>[0];
 }
 
 export interface ProviderUsageListResult {
   fetchedAt: string;
   providers: ProviderUsage[];
+  accountRouting?: ProviderUsageListResponseMessage["payload"]["accountRouting"];
 }
 
 const DEFAULT_PROVIDER_USAGE_CACHE_TTL_MS = 5 * 60 * 1000;
 
 export class ProviderUsageService {
   private readonly logger: Logger;
+  private readonly accountRouter: AccountRouterUsage | null;
   private readonly fetchers: ProviderUsageFetcher[];
   private readonly cacheTtlMs: number;
   private readonly now: () => number;
@@ -28,6 +33,9 @@ export class ProviderUsageService {
   private inFlight: Promise<ProviderUsageListResult> | null = null;
 
   constructor(options: ProviderUsageServiceOptions) {
+    this.accountRouter = options.accountRouter
+      ? new AccountRouterUsage(options.accountRouter)
+      : null;
     this.logger = options.logger.child({ module: "provider-usage-service" });
     this.fetchers =
       options.fetchers ??
@@ -39,7 +47,34 @@ export class ProviderUsageService {
     this.now = options.now ?? Date.now;
   }
 
-  async listUsage(options?: { forceRefresh?: boolean }): Promise<ProviderUsageListResult> {
+  async listUsage(options?: {
+    forceRefresh?: boolean;
+    agentId?: string;
+  }): Promise<ProviderUsageListResult> {
+    const [usage, routed] = await Promise.all([
+      this.listProviderUsage(options),
+      this.accountRouter?.read(options?.agentId).catch(() => ({ accounts: [] })) ?? null,
+    ]);
+    if (!routed) return usage;
+    return {
+      ...usage,
+      providers: usage.providers.map((provider) =>
+        provider.providerId === "codex"
+          ? Object.assign(
+              {},
+              provider,
+              { accounts: routed.accounts },
+              routed.accounts.length === 0 ? { error: "Account router usage is unavailable" } : {},
+            )
+          : provider,
+      ),
+      ...("routing" in routed && routed.routing ? { accountRouting: routed.routing } : {}),
+    };
+  }
+
+  private async listProviderUsage(options?: {
+    forceRefresh?: boolean;
+  }): Promise<ProviderUsageListResult> {
     const nowMs = this.now();
     if (
       !options?.forceRefresh &&

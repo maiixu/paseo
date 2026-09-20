@@ -738,6 +738,11 @@ export class VoiceAssistantWebSocketServer {
 
     this.providerUsageService = new ProviderUsageService({
       logger: this.logger,
+      accountRouter: {
+        logger: this.logger,
+        getCommand: () => this.daemonConfigStore.get().providers?.codex?.command,
+        getAgent: (id) => this.agentManager.getAgent(id),
+      },
     });
 
     this.wss = this.createWebSocketServer(server, wsConfig, auth);

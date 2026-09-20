@@ -6022,80 +6022,84 @@ test("dispatches terminals_changed events to typed listeners", async () => {
   ]);
 });
 
-test("sends provider.usage.list.request and resolves provider.usage.list.response", async () => {
-  const logger = createMockLogger();
-  const mock = createMockTransport();
+test.each([undefined, "account-routing-agent"])(
+  "sends provider usage with optional agent scope %s",
+  async (agentId) => {
+    const logger = createMockLogger();
+    const mock = createMockTransport();
 
-  const client = new DaemonClient({
-    url: "ws://test",
-    clientId: "clsk_unit_test",
-    logger,
-    reconnect: { enabled: false },
-    transportFactory: () => mock.transport,
-  });
-  clients.push(client);
+    const client = new DaemonClient({
+      url: "ws://test",
+      clientId: "clsk_unit_test",
+      logger,
+      reconnect: { enabled: false },
+      transportFactory: () => mock.transport,
+    });
+    clients.push(client);
 
-  const connectPromise = client.connect();
-  mock.triggerOpen();
-  await connectPromise;
+    const connectPromise = client.connect();
+    mock.triggerOpen();
+    await connectPromise;
 
-  const usagePromise = client.listProviderUsage({ requestId: "usage-1" });
+    const usagePromise = client.listProviderUsage({ requestId: "usage-1", agentId });
 
-  expect(JSON.parse(assertStr(mock.sent[0]))).toEqual({
-    type: "session",
-    message: {
-      type: "provider.usage.list.request",
-      requestId: "usage-1",
-    },
-  });
-
-  mock.triggerMessage(
-    wrapSessionMessage({
-      type: "provider.usage.list.response",
-      payload: {
+    expect(JSON.parse(assertStr(mock.sent[0]))).toEqual({
+      type: "session",
+      message: {
+        type: "provider.usage.list.request",
         requestId: "usage-1",
-        fetchedAt: "2026-06-19T00:00:00.000Z",
-        providers: [
-          {
-            providerId: "glm",
-            displayName: "GLM coding plan",
-            status: "available",
-            planLabel: "GLM coding plan",
-            windows: [
-              {
-                id: "biweekly",
-                label: "Biweekly",
-                usedPct: 23,
-                remainingPct: 77,
-              },
-            ],
-          },
-        ],
+        ...(agentId ? { agentId } : {}),
       },
-    }),
-  );
+    });
 
-  await expect(usagePromise).resolves.toEqual({
-    requestId: "usage-1",
-    fetchedAt: "2026-06-19T00:00:00.000Z",
-    providers: [
-      {
-        providerId: "glm",
-        displayName: "GLM coding plan",
-        status: "available",
-        planLabel: "GLM coding plan",
-        windows: [
-          {
-            id: "biweekly",
-            label: "Biweekly",
-            usedPct: 23,
-            remainingPct: 77,
-          },
-        ],
-      },
-    ],
-  });
-});
+    mock.triggerMessage(
+      wrapSessionMessage({
+        type: "provider.usage.list.response",
+        payload: {
+          requestId: "usage-1",
+          fetchedAt: "2026-06-19T00:00:00.000Z",
+          providers: [
+            {
+              providerId: "glm",
+              displayName: "GLM coding plan",
+              status: "available",
+              planLabel: "GLM coding plan",
+              windows: [
+                {
+                  id: "biweekly",
+                  label: "Biweekly",
+                  usedPct: 23,
+                  remainingPct: 77,
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+
+    await expect(usagePromise).resolves.toEqual({
+      requestId: "usage-1",
+      fetchedAt: "2026-06-19T00:00:00.000Z",
+      providers: [
+        {
+          providerId: "glm",
+          displayName: "GLM coding plan",
+          status: "available",
+          planLabel: "GLM coding plan",
+          windows: [
+            {
+              id: "biweekly",
+              label: "Biweekly",
+              usedPct: 23,
+              remainingPct: 77,
+            },
+          ],
+        },
+      ],
+    });
+  },
+);
 
 test("sends close_items_request and resolves close_items_response", async () => {
   const logger = createMockLogger();

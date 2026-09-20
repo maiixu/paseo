@@ -488,13 +488,16 @@ export class ProviderCatalogSession {
     msg: Extract<SessionInboundMessage, { type: "provider.usage.list.request" }>,
   ): Promise<void> {
     try {
-      const usage = await this.providerUsageService.listUsage();
+      const usage = await this.providerUsageService.listUsage(
+        msg.agentId ? { agentId: msg.agentId } : undefined,
+      );
       this.host.emit({
         type: "provider.usage.list.response",
         payload: {
           requestId: msg.requestId,
           fetchedAt: usage.fetchedAt,
           providers: usage.providers,
+          ...(usage.accountRouting ? { accountRouting: usage.accountRouting } : {}),
         },
       });
     } catch (error) {
