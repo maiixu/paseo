@@ -23,4 +23,9 @@ export type ProviderUsageListPayload = ProviderUsageListResponseMessage["payload
 export type ProviderUsageView =
   | { kind: "loading" }
   | { kind: "error"; message: string }
-  | { kind: "ready"; payload: ProviderUsageListPayload; isRefreshing: boolean };
+  | {
+      kind: "ready";
+      payload: ProviderUsageListPayload;
+      isRefreshing: boolean;
+      refreshError?: string;
+    };

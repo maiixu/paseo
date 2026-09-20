@@ -1745,6 +1745,7 @@ export const ProviderDiagnosticRequestMessageSchema = z.object({
 export const ProviderUsageListRequestMessageSchema = z.object({
   type: z.literal("provider.usage.list.request"),
   requestId: z.string(),
+  agentId: z.string().optional(),
 });
 
 export const ResumeAgentRequestMessageSchema = z.object({
@@ -5991,7 +5992,7 @@ export const ProviderUsageDetailSchema = z.object({
   tone: ProviderUsageToneSchema.optional(),
 });
 
-export const ProviderUsageSchema = z.object({
+const ProviderUsageBaseSchema = z.object({
   providerId: z.string(),
   displayName: z.string(),
   status: ProviderUsageStatusSchema,
@@ -6005,12 +6006,25 @@ export const ProviderUsageSchema = z.object({
   error: z.string().nullable().optional(),
 });
 
+export const ProviderUsageSchema = ProviderUsageBaseSchema.extend({
+  accounts: z.array(ProviderUsageBaseSchema.extend({ accountId: z.string() })).optional(),
+});
+
+export const ProviderAccountRoutingSchema = z.object({
+  providerId: z.string(),
+  accountId: z.string().nullable(),
+  status: z.enum(["active", "legacy", "pending", "unknown"]),
+  phase: z.string().nullable(),
+  checkedAt: z.string(),
+});
+
 export const ProviderUsageListResponseMessageSchema = z.object({
   type: z.literal("provider.usage.list.response"),
   payload: z.object({
     requestId: z.string(),
     fetchedAt: z.string(),
     providers: z.array(ProviderUsageSchema),
+    accountRouting: ProviderAccountRoutingSchema.optional(),
   }),
 });
 

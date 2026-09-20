@@ -278,6 +278,7 @@ function renderContextWindowMeter(
   provider: string | null,
   pending: boolean,
   glyphSize: number,
+  agentId?: string,
 ): ReactElement | null {
   const hasData = contextWindowMaxTokens !== null && contextWindowUsedTokens !== null;
   if (!hasData && !pending) {
@@ -285,6 +286,7 @@ function renderContextWindowMeter(
   }
   return (
     <ContextWindowMeter
+      agentId={agentId}
       maxTokens={contextWindowMaxTokens}
       usedTokens={contextWindowUsedTokens}
       totalCostUsd={totalCostUsd}
@@ -2003,6 +2005,7 @@ function ComposerContentImpl({
         agentState.provider,
         contextWindowPending,
         contextWindowMeterGlyphSize,
+        agentId,
       ),
     [
       contextWindowMaxTokens,
@@ -2012,6 +2015,7 @@ function ComposerContentImpl({
       agentState.provider,
       contextWindowPending,
       contextWindowMeterGlyphSize,
+      agentId,
     ],
   );
   const beforeVoiceContent = useMemo(

@@ -11,6 +11,7 @@ import type {
 import type { ProviderApiFetch, ProviderUsageFetcher } from "../provider.js";
 import {
   ApiNumberSchema,
+  ApiNullableNumberSchema,
   balanceToneFromRemaining,
   toneFromUsedPct,
   fetchProviderApi,
@@ -29,8 +30,9 @@ const CodexAuthSchema = z.object({
 });
 
 const CodexWindowSchema = z.object({
-  used_percent: ApiNumberSchema.optional(),
+  used_percent: ApiNullableNumberSchema.optional(),
   reset_at: ApiNumberSchema.optional(),
+  limit_window_seconds: ApiNumberSchema.optional(),
 });
 
 const CodexUsageResponseSchema = z.object({
@@ -63,17 +65,26 @@ type CodexUsageResponse = z.infer<typeof CodexUsageResponseSchema>;
 interface CodexQuotaProviderOptions {
   logger: Logger;
   codexHome?: string;
+  strictHome?: boolean;
   fetch?: ProviderApiFetch;
 }
 
 function codexWindow(
   window: CodexWindow | null | undefined,
-): { usedPct: number; resetsAt: string | null } | null {
+): { usedPct: number | null; resetsAt: string | null } | null {
   if (!window) return null;
   return {
-    usedPct: window.used_percent ?? 0,
+    usedPct: window.used_percent ?? null,
     resetsAt: window.reset_at != null ? new Date(window.reset_at * 1000).toISOString() : null,
   };
+}
+
+function quotaWindowLabel(window: CodexWindow | null | undefined, fallback: string): string {
+  const seconds = window?.limit_window_seconds;
+  if (!seconds) return fallback;
+  if (seconds === 604800) return "Weekly";
+  if (seconds % 3600 === 0) return `${seconds / 3600}-hour`;
+  return `${Math.round(seconds / 60)}-minute`;
 }
 
 export class CodexQuotaProvider implements ProviderUsageFetcher {
@@ -81,11 +92,13 @@ export class CodexQuotaProvider implements ProviderUsageFetcher {
   readonly displayName = "Codex";
 
   private readonly codexHome: string;
+  private readonly strictHome: boolean;
   private readonly fetchApi: ProviderApiFetch;
 
   constructor(options: CodexQuotaProviderOptions) {
     this.codexHome = options.codexHome || process.env["CODEX_HOME"] || join(homedir(), ".codex");
     this.fetchApi = options.fetch ?? fetch;
+    this.strictHome = options.strictHome ?? false;
   }
 
   async fetchUsage(): Promise<ProviderUsage> {
@@ -116,7 +129,7 @@ export class CodexQuotaProvider implements ProviderUsageFetcher {
       windows.push(
         windowFromUsedPct({
           id: "session",
-          label: "Session",
+          label: quotaWindowLabel(resp.rate_limit?.primary_window, "Session"),
           utilizationPct: session.usedPct,
           resetsAt: session.resetsAt,
           tone: toneFromUsedPct(session.usedPct),
@@ -127,7 +140,7 @@ export class CodexQuotaProvider implements ProviderUsageFetcher {
       windows.push(
         windowFromUsedPct({
           id: "weekly",
-          label: "Weekly",
+          label: quotaWindowLabel(resp.rate_limit?.secondary_window, "Weekly"),
           utilizationPct: weekly.usedPct,
           resetsAt: weekly.resetsAt,
           tone: toneFromUsedPct(weekly.usedPct),
@@ -170,11 +183,13 @@ export class CodexQuotaProvider implements ProviderUsageFetcher {
   }
 
   private async readCodexAuth(): Promise<CodexAuth | null> {
-    const candidates = [
-      ...(process.env["CODEX_HOME"] ? [join(process.env["CODEX_HOME"], "auth.json")] : []),
-      join(homedir(), ".config", "codex", "auth.json"),
-      join(this.codexHome, "auth.json"),
-    ];
+    const candidates = this.strictHome
+      ? [join(this.codexHome, "auth.json")]
+      : [
+          ...(process.env["CODEX_HOME"] ? [join(process.env["CODEX_HOME"], "auth.json")] : []),
+          join(homedir(), ".config", "codex", "auth.json"),
+          join(this.codexHome, "auth.json"),
+        ];
     for (const path of candidates) {
       if (!existsSync(path)) continue;
       try {

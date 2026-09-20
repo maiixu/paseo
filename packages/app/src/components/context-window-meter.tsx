@@ -9,6 +9,7 @@ import { useProviderUsage } from "@/provider-usage/use-provider-usage";
 import { formatTokenCount } from "./context-window-meter.utils";
 
 interface ContextWindowMeterProps {
+  agentId?: string;
   maxTokens: number | null;
   usedTokens: number | null;
   totalCostUsd?: number | null;
@@ -97,6 +98,7 @@ function getMeterGeometry(showPercentage: boolean, glyphSize?: number) {
 }
 
 export function ContextWindowMeter({
+  agentId,
   maxTokens,
   usedTokens,
   totalCostUsd,
@@ -111,7 +113,7 @@ export function ContextWindowMeter({
   const [isTooltipOpen, setIsTooltipOpen] = useState(false);
   const { view: providerUsageView, refresh: refreshProviderUsage } = useProviderUsage(
     serverId ?? null,
-    { enabled: isTooltipOpen },
+    { enabled: isTooltipOpen, agentId },
   );
   const percentage =
     maxTokens !== null && usedTokens !== null ? getUsagePercentage(maxTokens, usedTokens) : null;

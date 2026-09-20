@@ -10,16 +10,20 @@ export const PROVIDER_USAGE_STALE_TIME_MS = 5 * 60 * 1000;
 
 type ProviderUsageClient = Pick<DaemonClient, "listProviderUsage">;
 
-export function providerUsageQueryKey(serverId: string | null | undefined) {
-  return ["providerUsage", serverId ?? ""] as const;
+export function providerUsageQueryKey(serverId: string | null | undefined, agentId?: string) {
+  return ["providerUsage", serverId ?? "", agentId ?? ""] as const;
 }
 
-async function fetchProviderUsage(client: ProviderUsageClient): Promise<ProviderUsageListPayload> {
-  return client.listProviderUsage();
+async function fetchProviderUsage(
+  client: ProviderUsageClient,
+  agentId?: string,
+): Promise<ProviderUsageListPayload> {
+  return client.listProviderUsage(agentId ? { agentId } : undefined);
 }
 
 interface UseProviderUsageOptions {
   enabled?: boolean;
+  agentId?: string;
 }
 
 export function useProviderUsage(
@@ -36,7 +40,10 @@ export function useProviderUsage(
   const supportsProviderUsage = useSessionStore(
     (state) => state.sessions[serverId ?? ""]?.serverInfo?.features?.providerUsageList === true,
   );
-  const queryKey = useMemo(() => providerUsageQueryKey(serverId), [serverId]);
+  const queryKey = useMemo(
+    () => providerUsageQueryKey(serverId, options.agentId),
+    [serverId, options.agentId],
+  );
   const canFetch = Boolean(serverId && client && isConnected && supportsProviderUsage);
   const enabled = Boolean((options.enabled ?? true) && canFetch);
 
@@ -44,8 +51,8 @@ export function useProviderUsage(
     if (!client) {
       throw new Error(providerUsageCopy.clientUnavailable);
     }
-    return fetchProviderUsage(client);
-  }, [client]);
+    return fetchProviderUsage(client, options.agentId);
+  }, [client, options.agentId]);
 
   const query = useQuery({
     queryKey,
@@ -55,6 +62,7 @@ export function useProviderUsage(
     refetchOnMount: true,
     refetchOnReconnect: false,
     refetchOnWindowFocus: false,
+    refetchInterval: enabled && options.agentId ? 30_000 : false,
   });
 
   const refresh = useCallback(async () => {
@@ -79,6 +87,7 @@ export function useProviderUsage(
         kind: "ready",
         payload: query.data,
         isRefreshing: query.isFetching,
+        ...(query.isError ? { refreshError: "Refresh failed; showing last fetched usage" } : {}),
       };
     }
     if (query.isError) {

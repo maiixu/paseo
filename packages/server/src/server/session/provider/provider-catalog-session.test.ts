@@ -296,6 +296,31 @@ describe("ProviderCatalogSession", () => {
     });
   });
 
+  it("passes the requested agent to account routing and preserves the routing response", async () => {
+    const accountRouting = {
+      providerId: "codex",
+      accountId: "plus",
+      status: "active" as const,
+      phase: "idle",
+      checkedAt: "2026-09-20T00:00:00Z",
+    };
+    const listUsage = vi.fn(async () => ({
+      fetchedAt: accountRouting.checkedAt,
+      providers: [],
+      accountRouting,
+    }));
+    const { subsystem, emitted } = makeSubsystem({ usage: { listUsage } });
+    await subsystem.handleProviderUsageListRequest({
+      type: "provider.usage.list.request",
+      requestId: "routed",
+      agentId: "agent-id",
+    });
+    expect(listUsage).toHaveBeenCalledWith({ agentId: "agent-id" });
+    expect(findByType(emitted, "provider.usage.list.response")?.payload.accountRouting).toEqual(
+      accountRouting,
+    );
+  });
+
   it("surfaces a usage-list failure as an rpc_error envelope", async () => {
     const { subsystem, emitted } = makeSubsystem({
       usage: {
