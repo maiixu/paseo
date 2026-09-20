@@ -10,6 +10,7 @@ export interface SidebarWorkspaceGroup {
   leading:
     | { kind: "status"; bucket: StatusBucket }
     | { kind: "managed" }
+    | { kind: "pinned" }
     | { kind: "conversation" };
 }
 

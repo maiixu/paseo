@@ -56,6 +56,7 @@ export function buildSidebarProjection(input: SidebarProjectionInput): SidebarPr
     keys: input.pinnedKeys,
     pinnedWorkspaceOrder: input.pinnedWorkspaceOrder,
   });
+  if (input.groupMode === "responsibility") pinnedGroups.pinnedChats = [];
   const pinnedWorkspaceKeys = new Set(input.pinnedKeys.pinnedWorkspaceKeys);
   const unpinnedWorkspaces = Array.from(input.workspaceEntriesByKey.values()).filter(
     (workspace) =>
@@ -104,7 +105,10 @@ function buildWorkspaceGroups(
       return [];
     case "responsibility":
       return managedWorkspaceGroups(
-        unpinnedWorkspaces,
+        unpinnedWorkspaces.map((row) => ({
+          ...row,
+          pinnedAt: input.pinnedKeys.pinnedAtByKey[row.workspaceKey] ?? row.pinnedAt,
+        })),
         input.managedPresentations ?? {},
         input.pinnedWorkspaceOrder,
       );

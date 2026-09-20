@@ -175,110 +175,84 @@ describe("buildSidebarProjection", () => {
   });
 });
 
-it("retains Pinned shortcuts and each workspace in its responsibility group", () => {
+const presentation = (group: "needs-you" | "managed" | "conversations") => ({
+  managed: group !== "conversations",
+  group,
+  state: group === "needs-you" ? ("answer" as const) : ("waiting" as const),
+  nextRunAt: null,
+  lastRunAt: null,
+  schedules: 1,
+});
+const rowsOf = (result: ReturnType<typeof buildSidebarProjection>, key: string) =>
+  result.workspaceGroups.find((g) => g.key === `responsibility-${key}`)?.rows ?? [];
+
+it("assigns every workspace once with attention before pins before management", () => {
+  const base = projectionInput();
+  const build = (group: "needs-you" | "managed") =>
+    buildSidebarProjection({
+      ...base,
+      groupMode: "responsibility",
+      managedPresentations: {
+        "srv:pinned": presentation(group),
+        "srv:unpinned": presentation("needs-you"),
+      },
+    });
+  const waiting = build("managed");
+  expect(waiting.pinnedGroups.pinnedChats).toEqual([]);
+  expect(waiting.workspaceGroups.map((g) => g.key)).toEqual([
+    "responsibility-needs-you",
+    "responsibility-pinned",
+  ]);
+  expect(rowsOf(waiting, "pinned").map((r) => r.workspaceId)).toEqual(["pinned"]);
+  const asking = build("needs-you");
+  expect(rowsOf(asking, "pinned")).toEqual([]);
+  expect(
+    rowsOf(asking, "needs-you").find((r) => r.workspaceId === "pinned")?.pinnedAt,
+  ).toBeTruthy();
+  expect(asking.workspaceGroups.flatMap((g) => g.rows)).toHaveLength(2);
+  expect(rowsOf(build("managed"), "pinned")).toHaveLength(1);
+  expect(waiting.shortcutModel.shortcutTargets.map((r) => r.workspaceId)).toEqual([
+    "unpinned",
+    "pinned",
+  ]);
+});
+
+it("collapses each responsibility group without suppressing other groups or shortcuts", () => {
   const base = projectionInput();
   const result = buildSidebarProjection({
     ...base,
     groupMode: "responsibility",
-    managedPresentations: {
-      "srv:pinned": {
-        managed: true,
-        group: "managed",
-        state: "waiting",
-        nextRunAt: null,
-        lastRunAt: null,
-        schedules: 1,
-      },
-      "srv:unpinned": {
-        managed: true,
-        group: "needs-you",
-        state: "answer",
-        nextRunAt: null,
-        lastRunAt: null,
-        schedules: 1,
-      },
-    },
+    collapsedWorkspaceGroupKeys: new Set(["responsibility-pinned"]),
   });
-  expect(result.pinnedGroups.pinnedChats.map((r) => r.workspaceKey)).toEqual(["srv:pinned"]);
-  expect(result.shortcutModel.shortcutTargets).toEqual([
-    { serverId: "srv", workspaceId: "pinned" },
-    { serverId: "srv", workspaceId: "unpinned" },
-  ]);
-  expect(result.workspaceGroups.map((g) => g.rows.map((r) => r.workspaceKey))).toEqual([
-    ["srv:unpinned"],
-    ["srv:pinned"],
-    [],
-  ]);
-  expect(result.workspaceGroups.flatMap((g) => g.rows)).toHaveLength(2);
+  expect(rowsOf(result, "pinned")).toHaveLength(1);
+  expect(result.shortcutModel.shortcutTargets.map((r) => r.workspaceId)).toEqual(["unpinned"]);
 });
 
-it("removes the routine finished badge from managed rows without modifying source state", () => {
+it("keeps routine finished managed rows out of Needs you and preserves source state", () => {
   const row = makeWorkspace("bot", "attention");
-  const base = projectionInput();
-  const result = buildSidebarProjection({
-    ...base,
-    groupMode: "responsibility",
-    workspaceEntriesByKey: new Map([[row.entry.workspaceKey, row.entry]]),
-    managedPresentations: {
-      [row.entry.workspaceKey]: {
-        managed: true,
-        group: "managed",
-        state: "waiting",
-        nextRunAt: null,
-        lastRunAt: null,
-        schedules: 1,
-      },
-    },
-  });
-  expect(result.workspaceGroups[1]?.rows[0]?.statusBucket).toBe("done");
-  expect(row.entry.statusBucket).toBe("attention");
-});
-
-it("keeps pins first within responsibility groups without duplicating them", () => {
-  const a = makeWorkspace("A"),
-    b = makeWorkspace("B");
-  b.entry.pinnedAt = "2026-09-19T00:00:00Z";
-  const presentation = {
-    managed: true,
-    group: "managed" as const,
-    state: "waiting" as const,
-    nextRunAt: null,
-    lastRunAt: null,
-    schedules: 1,
-  };
   const result = buildSidebarProjection({
     ...projectionInput(),
     groupMode: "responsibility",
-    workspaceEntriesByKey: new Map([
-      [a.entry.workspaceKey, a.entry],
-      [b.entry.workspaceKey, b.entry],
-    ]),
-    managedPresentations: {
-      [a.entry.workspaceKey]: presentation,
-      [b.entry.workspaceKey]: presentation,
-    },
+    workspaceEntriesByKey: new Map([[row.entry.workspaceKey, row.entry]]),
+    managedPresentations: { [row.entry.workspaceKey]: presentation("managed") },
   });
-  expect(result.workspaceGroups[1]?.rows.map((r) => r.name)).toEqual(["B", "A"]);
+  expect(result.workspaceGroups.map((g) => g.key)).toEqual(["responsibility-managed"]);
+  expect(rowsOf(result, "managed")[0]?.statusBucket).toBe("done");
+  expect(row.entry.statusBucket).toBe("attention");
 });
 
-it("keeps pinned questions in Needs you when Pinned is collapsed", () => {
-  const base = projectionInput({ pinnedCollapsed: true });
+it("retains stored pin order and separates unpinned conversations", () => {
+  const a = makeWorkspace("A"),
+    b = makeWorkspace("B"),
+    c = makeWorkspace("C");
+  a.entry.pinnedAt = b.entry.pinnedAt = "2026-09-20T00:00:00Z";
   const result = buildSidebarProjection({
-    ...base,
+    ...projectionInput(),
     groupMode: "responsibility",
-    managedPresentations: {
-      "srv:pinned": {
-        managed: true,
-        group: "needs-you",
-        state: "answer",
-        nextRunAt: null,
-        lastRunAt: null,
-        schedules: 1,
-      },
-    },
+    workspaceEntriesByKey: new Map([a, b, c].map((x) => [x.entry.workspaceKey, x.entry])),
+    pinnedWorkspaceOrder: [b.entry.workspaceKey, a.entry.workspaceKey],
   });
-  expect(result.workspaceGroups[0]?.rows.map((r) => r.workspaceKey)).toContain("srv:pinned");
-  expect(
-    result.shortcutModel.shortcutTargets.filter((r) => r.workspaceId === "pinned"),
-  ).toHaveLength(1);
+  expect(rowsOf(result, "pinned").map((r) => r.name)).toEqual(["B", "A"]);
+  expect(rowsOf(result, "conversations").map((r) => r.name)).toEqual(["C"]);
+  expect(result.workspaceGroups.map((g) => g.label)).toEqual(["Pinned · 2", "Conversations · 1"]);
 });

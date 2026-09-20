@@ -25,7 +25,7 @@ import type { StatusBucket } from "@/hooks/sidebar-status-view-model";
 import type { SidebarWorkspaceGroup } from "@/components/sidebar/sidebar-labels";
 import { SidebarFilterEmptyState } from "@/components/sidebar/empty-states";
 import type { HostBadgeModel } from "@/hosts/appearance";
-import { isWeb as platformIsWeb, isNative as platformIsNative } from "@/constants/platform";
+import { isNative as platformIsNative } from "@/constants/platform";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { StyleSheet } from "react-native-unistyles";
 import type { Theme } from "@/styles/theme";
@@ -34,6 +34,7 @@ import { withUnistyles } from "react-native-unistyles";
 import {
   Bot,
   MessagesSquare,
+  Pin,
   ChevronDown,
   ChevronRight,
   CircleAlert,
@@ -107,6 +108,7 @@ const ThemedChevronDown = withUnistyles(ChevronDown);
 const ThemedChevronRight = withUnistyles(ChevronRight);
 const ThemedCircleAlert = withUnistyles(CircleAlert);
 const ThemedCircleCheck = withUnistyles(CircleCheck);
+const ThemedPin = withUnistyles(Pin);
 const ThemedCircleDot = withUnistyles(CircleDot);
 const ThemedCircleX = withUnistyles(CircleX);
 const EMPTY_SHORTCUT_INDEX = new Map<string, number>();
@@ -237,6 +239,9 @@ export function SidebarStatusWorkspaceList({
       ) : (
         <StatusGroupList
           groups={groups}
+          onPinnedWorkspaceReorder={onPinnedWorkspaceReorder}
+          parentGestureRef={parentGestureRef}
+          dragGestureHostActive={dragGestureHostActive}
           collapsedWorkspaceGroupKeys={collapsedWorkspaceGroupKeys}
           projectIconByProjectViewKey={projectIconByProjectViewKey}
           shortcutIndex={statusShortcutIndex}
@@ -285,6 +290,9 @@ function StatusGroupList({
   hostBadgeByServerId,
   supportsPinningByServerId,
   onToggleWorkspacePin,
+  onPinnedWorkspaceReorder,
+  parentGestureRef,
+  dragGestureHostActive,
 }: {
   groups: SidebarWorkspaceGroup[];
   collapsedWorkspaceGroupKeys: ReadonlySet<string>;
@@ -295,6 +303,9 @@ function StatusGroupList({
   hostBadgeByServerId: ReadonlyMap<string, HostBadgeModel>;
   supportsPinningByServerId: ReadonlyMap<string, boolean>;
   onToggleWorkspacePin: ToggleSidebarWorkspacePin;
+  onPinnedWorkspaceReorder: (rows: SidebarWorkspaceEntry[]) => void;
+  parentGestureRef?: MutableRefObject<GestureType | undefined>;
+  dragGestureHostActive?: boolean;
 }) {
   return (
     <>
@@ -310,6 +321,9 @@ function StatusGroupList({
           hostBadgeByServerId={hostBadgeByServerId}
           supportsPinningByServerId={supportsPinningByServerId}
           onToggleWorkspacePin={onToggleWorkspacePin}
+          onPinnedWorkspaceReorder={onPinnedWorkspaceReorder}
+          parentGestureRef={parentGestureRef}
+          dragGestureHostActive={dragGestureHostActive}
         />
       ))}
     </>
@@ -326,6 +340,9 @@ function StatusGroupRows({
   hostBadgeByServerId,
   supportsPinningByServerId,
   onToggleWorkspacePin,
+  onPinnedWorkspaceReorder,
+  parentGestureRef,
+  dragGestureHostActive,
 }: {
   group: SidebarWorkspaceGroup;
   collapsed: boolean;
@@ -336,6 +353,9 @@ function StatusGroupRows({
   hostBadgeByServerId: ReadonlyMap<string, HostBadgeModel>;
   supportsPinningByServerId: ReadonlyMap<string, boolean>;
   onToggleWorkspacePin: ToggleSidebarWorkspacePin;
+  onPinnedWorkspaceReorder: (rows: SidebarWorkspaceEntry[]) => void;
+  parentGestureRef?: MutableRefObject<GestureType | undefined>;
+  dragGestureHostActive?: boolean;
 }) {
   const {
     visibleItems: visibleWorkspaces,
@@ -343,6 +363,48 @@ function StatusGroupRows({
     canToggle: canToggleWorkspaces,
     toggleExpanded: toggleWorkspacesExpanded,
   } = useLimitedSidebarGroup(group.rows);
+
+  const renderWorkspace = useCallback(
+    ({
+      item: workspace,
+      drag,
+      isActive,
+      dragHandleProps,
+    }: Pick<DraggableRenderItemInfo<SidebarWorkspaceEntry>, "item"> &
+      Partial<
+        Pick<
+          DraggableRenderItemInfo<SidebarWorkspaceEntry>,
+          "drag" | "isActive" | "dragHandleProps"
+        >
+      >) => (
+      <StatusWorkspaceRow
+        key={workspace.workspaceKey}
+        drag={drag}
+        isDragging={isActive}
+        dragHandleProps={dragHandleProps}
+        workspace={workspace}
+        {...buildStatusRowProjectPresentation({
+          workspace,
+          projectIconByProjectViewKey,
+          hostBadgeByServerId,
+        })}
+        shortcutNumber={shortcutIndex.get(workspace.workspaceKey) ?? null}
+        showShortcutBadge={showShortcutBadges}
+        canPin={supportsPinningByServerId.get(workspace.serverId) === true}
+        onToggleWorkspacePin={onToggleWorkspacePin}
+        onWorkspacePress={onWorkspacePress}
+      />
+    ),
+    [
+      projectIconByProjectViewKey,
+      hostBadgeByServerId,
+      shortcutIndex,
+      showShortcutBadges,
+      supportsPinningByServerId,
+      onToggleWorkspacePin,
+      onWorkspacePress,
+    ],
+  );
 
   return (
     <View style={collapsed ? undefined : styles.statusGroupBlockExpanded}>
@@ -352,22 +414,22 @@ function StatusGroupRows({
           style={styles.statusWorkspaceListContainer}
           testID={`sidebar-status-group-rows-${group.key}`}
         >
-          {visibleWorkspaces.map((workspace) => (
-            <StatusWorkspaceRow
-              key={workspace.workspaceKey}
-              workspace={workspace}
-              {...buildStatusRowProjectPresentation({
-                workspace,
-                projectIconByProjectViewKey,
-                hostBadgeByServerId,
-              })}
-              shortcutNumber={shortcutIndex.get(workspace.workspaceKey) ?? null}
-              showShortcutBadge={showShortcutBadges}
-              canPin={supportsPinningByServerId.get(workspace.serverId) === true}
-              onToggleWorkspacePin={onToggleWorkspacePin}
-              onWorkspacePress={onWorkspacePress}
+          {group.leading.kind === "pinned" ? (
+            <DraggableList
+              testID="sidebar-responsibility-pinned-list"
+              data={visibleWorkspaces}
+              keyExtractor={statusWorkspaceKeyExtractor}
+              renderItem={renderWorkspace}
+              onDragEnd={onPinnedWorkspaceReorder}
+              scrollEnabled={false}
+              useDragHandle
+              nestable={platformIsNative}
+              simultaneousGestureRef={parentGestureRef}
+              gestureHostPresented={dragGestureHostActive}
             />
-          ))}
+          ) : (
+            visibleWorkspaces.map((workspace) => renderWorkspace({ item: workspace }))
+          )}
           {canToggleWorkspaces ? (
             <SidebarGroupToggleRow
               expanded={workspacesExpanded}
@@ -433,7 +495,7 @@ function StatusGroupHeader({
   return (
     <View onPointerEnter={handleHoverIn} onPointerLeave={handleHoverOut}>
       <Pressable
-        accessibilityRole={platformIsWeb ? undefined : "button"}
+        accessibilityRole="button"
         accessibilityLabel={`${group.label} group`}
         accessibilityState={accessibilityState}
         style={rowStyle}
@@ -445,7 +507,7 @@ function StatusGroupHeader({
             <StatusGroupLeadingVisual
               leading={group.leading}
               collapsed={collapsed}
-              showChevron={isHovered}
+              showChevron={isHovered || group.key.startsWith("responsibility-")}
             />
           </View>
           <View style={styles.statusGroupTitleGroup}>
@@ -469,6 +531,8 @@ function StatusGroupLeadingVisual({
   showChevron: boolean;
 }) {
   if (!showChevron) {
+    if (leading.kind === "pinned")
+      return <ThemedPin size={14} uniProps={foregroundMutedColorMapping} />;
     if (leading.kind === "managed")
       return <ThemedBot size={14} uniProps={foregroundMutedColorMapping} />;
     if (leading.kind === "conversation")
