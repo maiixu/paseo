@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { StateStorage } from "zustand/middleware";
 import {
   createSidebarViewStorage,
+  SIDEBAR_VIEW_STORAGE_KEY,
   hasActiveSidebarLabelFilter,
   migrateSidebarViewState,
   SIDEBAR_UNLABELLED_LABEL_KEY,
@@ -299,4 +300,37 @@ it("preserves the responsibility grouping preference through hydration", () => {
       labelFilter: { labels: [] },
     }),
   ).toMatchObject({ groupMode: "responsibility", hostFilters: ["cloud"] });
+});
+
+it("adopts Responsibility once and ignores later writes from old tabs", async () => {
+  const backing = createMemoryStorage({
+    "sidebar-view": JSON.stringify({
+      state: { groupMode: "project", hostFilters: ["cloud"] },
+      version: 6,
+    }),
+  });
+  const storage = createSidebarViewStorage(backing);
+  const adopted = JSON.parse((await storage.getItem(SIDEBAR_VIEW_STORAGE_KEY))!);
+  expect(adopted.state).toMatchObject({ groupMode: "responsibility", hostFilters: ["cloud"] });
+  await backing.setItem(
+    "sidebar-view",
+    JSON.stringify({ state: { groupMode: "project" }, version: 6 }),
+  );
+  expect(JSON.parse((await storage.getItem(SIDEBAR_VIEW_STORAGE_KEY))!).state.groupMode).toBe(
+    "responsibility",
+  );
+  adopted.state.groupMode = "status";
+  await storage.setItem(SIDEBAR_VIEW_STORAGE_KEY, JSON.stringify(adopted));
+  expect(JSON.parse((await storage.getItem(SIDEBAR_VIEW_STORAGE_KEY))!).state.groupMode).toBe(
+    "status",
+  );
+});
+it("defaults a fresh or invalid legacy Hub to Responsibility", async () => {
+  const cases: Record<string, string | null>[] = [{}, { "sidebar-view": "not JSON" }];
+  for (const entries of cases) {
+    const value = await createSidebarViewStorage(createMemoryStorage(entries)).getItem(
+      SIDEBAR_VIEW_STORAGE_KEY,
+    );
+    expect(JSON.parse(value!).state.groupMode).toBe("responsibility");
+  }
 });

@@ -1,5 +1,10 @@
 # Managed threads in the sidebar
 
+Fresh Hub pages default to Responsibility. Its versioned view-preference key is
+isolated from older open clients; same-version tabs synchronize explicit grouping
+and filter choices. Existing filters migrate once, while Project and Status remain
+selectable after adoption.
+
 Responsibility view has four peer collapsible groups: Needs you, Pinned, Bot managed,
 and Conversations. Empty groups are hidden. Every workspace appears exactly once:
 attention takes priority, then pinning, then management, then ordinary conversation.
