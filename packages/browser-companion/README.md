@@ -2,13 +2,15 @@
 
 This private Chrome extension accompanies the browser-feedback Web build. It receives explicit agent state and notification events from Paseo pages, shows notifications, and returns you to the correct Chrome tab. It does not connect to a daemon or read agent credentials.
 
-## Maintaining the 0.8.0 candidate
+## Maintaining the 0.9.2 candidate
 
-The candidate starts at upstream tag `v0.8.0` (`b8e24677e12b`). Retain the companion, per-tab feedback, workspace titles, fresh Hub defaults and bounded optional cache reads. Preserve upstream host-scoped provider SVGs and the new externally owned form host/directory state when porting defaults.
+The candidate merges upstream tag `v0.9.2` (`c67b7158b441`) into the maintained personal patch line. Retain the companion, per-tab feedback, workspace titles, fresh Hub defaults and bounded optional cache reads. Preserve upstream host-scoped provider SVGs and the new externally owned form host/directory state when porting defaults.
 
 Use upstream native async questions and Codex Fast capabilities instead of the former `e241abece` and `ae7c4cba5` backports. A small daemon patch separately notifies new distinct questions and lets a connected Web client receive questions after the activity window expires. Completion and ordinary tool-permission policy remain upstream. This is a source/build milestone, not production acceptance: test packaged daemons, saved sessions, profiles, schedules and the two-host browser journey before switching either host.
 
 Question notifications still need acceptance. The second outstanding question, an absence longer than three minutes, focused suppression and history replay require explicit tests; passing the component or companion tests does not prove those paths deliver an OS notification.
+
+The 0.9 event subscription owns notification delivery; browser tracing remains inside that feed. Keep the bounded cache reader alongside upstream rejected-write recovery. Retain Responsibility grouping, pin/drag preferences and per-account usage. The native CLI and router allowlist require separate Sol 6 acceptance before publishing the new default.
 
 ## Build and load
 
@@ -28,17 +30,17 @@ The extension only accepts top-frame pages at `http://127.0.0.1:6767` and the is
 
 ## Install and update on mactop
 
-Finish the two-host acceptance journey before switching the live `6767` origin. For a Web-only update, only mactop serves the custom build; Cloudtop needs no Web installation or restart. A daemon version upgrade is a separate rollout on each host. It assumes the existing `com.maixu.paseo` LaunchAgent, whose launcher already passes `--web-ui`.
+Finish the two-host acceptance journey before switching the live `6767` origin. For a Web-only update, only mactop serves the custom build; Cloudtop needs no Web installation or restart. A daemon version upgrade is a separate rollout on each host. It assumes the existing `com.maixu.paseo` LaunchAgent, whose 0.9 launcher uses `daemon run` with the existing Web setting.
 
 Use Node 22 for this checkout. Build in the worktree, then copy the accepted artifacts into `~/.local/share/paseo/browser-feedback`. Never serve a worktree build directory: rebuilds can delete it, and worktree cleanup would remove the installed UI. The [daemon Web build](../../scripts/build-daemon-web-ui.mjs) also deletes its output directory before copying assets.
 
 ### New-agent defaults
 
-The personal Web build pins global new-agent creation to cloudtop and the `codex-astra-medium` profile. Set these public build variables in the shell before building:
+The personal Web build pins global new-agent creation to cloudtop and the `codex-sol6-high` profile. Set these public build variables in the shell before building:
 
 ```bash
 export EXPO_PUBLIC_PASEO_DEFAULT_SERVER_ID="$(ssh cloudtop 'cat ~/.paseo/server-id')"
-export EXPO_PUBLIC_PASEO_DEFAULT_PROFILE_ID=codex-astra-medium
+export EXPO_PUBLIC_PASEO_DEFAULT_PROFILE_ID=codex-sol6-high
 ```
 
 Keep these variables in later builds. The host ID identifies the saved connection; it is not a credential. Profile values come from that host's existing daemon configuration. Both hosts must carry the named profile. Profile ordering is separate from default selection and lives in each host's `daemon.agentProfiles`.
