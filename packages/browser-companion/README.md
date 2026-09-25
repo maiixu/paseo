@@ -43,7 +43,7 @@ export EXPO_PUBLIC_PASEO_DEFAULT_SERVER_ID="$(ssh cloudtop 'cat ~/.paseo/server-
 export EXPO_PUBLIC_PASEO_DEFAULT_PROFILE_ID=codex-sol6-high
 ```
 
-Keep these variables in later builds. The host ID identifies the saved connection; it is not a credential. Profile values come from that host's existing daemon configuration. Both hosts must carry the named profile. Profile ordering is separate from default selection and lives in each host's `daemon.agentProfiles`.
+Keep these variables in later builds and clear Metro caches when exporting; changing an environment value alone can reuse a bundle with the previous default. The host ID identifies the saved connection; it is not a credential. Profile values come from that host's existing daemon configuration. Both hosts must carry the named profile. Profile ordering is separate from default selection and lives in each host's `daemon.agentProfiles`.
 
 The homepage and global **New workspace** use the configured host. The homepage opens a fresh draft there, even when a workspace on that host was last viewed. Explicit workspace/agent/project URLs and restored draft selections retain their context. A one-off model choice does not replace the next new agent's default. Existing agents retain their configuration. Builds without these variables keep the upstream selection behavior.
 
@@ -54,7 +54,7 @@ Run these commands from the accepted feature worktree, after the build commands 
 ```bash
 set -e
 umask 077
-env -u PASEO_WEB_PLATFORM npm run build:web --workspace=@getpaseo/app
+env -u PASEO_WEB_PLATFORM npm run build:web --workspace=@getpaseo/app -- --clear
 BF_ROOT="$HOME/.local/share/paseo/browser-feedback"
 BF_RELEASE="$BF_ROOT/releases/$(git rev-parse --short=12 HEAD)"
 BF_STOCK="/opt/homebrew/lib/node_modules/@getpaseo/cli/node_modules/@getpaseo/server/dist/server/web-ui"
