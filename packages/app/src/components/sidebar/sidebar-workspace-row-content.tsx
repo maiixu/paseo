@@ -1,3 +1,4 @@
+import { BackgroundTaskMeta } from "@/background-tasks/components";
 import { useSessionStore } from "@/stores/session-store";
 import { selectTopicLabels } from "./workspace-meta-row/meta-items";
 import { ManagedThreadMeta } from "@/managed-threads/components";
@@ -178,6 +179,7 @@ export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowConte
             <View style={sidebarWorkspaceRowStyles.rowRight}>{children}</View>
           </View>
           <ManagedThreadMeta workspaceKey={workspace.workspaceKey} />
+          <BackgroundTaskMeta workspaceKey={workspace.workspaceKey} />
           <WorkspaceMetaRow
             currentBranch={workspace.currentBranch}
             projectName={leadingProjectName}
