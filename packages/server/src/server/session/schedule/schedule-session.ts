@@ -43,6 +43,7 @@ export class ScheduleSession {
           | "schedule/inspect"
           | "schedule/logs"
           | "schedule/pause"
+          | "schedule.end.request"
           | "schedule/resume"
           | "schedule/delete"
           | "schedule/run-once"
@@ -140,6 +141,24 @@ export class ScheduleSession {
         payload: {
           requestId: request.requestId,
           runs,
+          error: null,
+        },
+      });
+    } catch (error) {
+      this.emitScheduleRpcError(request, error);
+    }
+  }
+
+  async handleScheduleEndRequest(
+    request: Extract<SessionInboundMessage, { type: "schedule.end.request" }>,
+  ): Promise<void> {
+    try {
+      const schedule = await this.scheduleService.end(request.scheduleId);
+      this.host.emit({
+        type: "schedule.end.response",
+        payload: {
+          requestId: request.requestId,
+          schedule: this.toScheduleSummary(schedule),
           error: null,
         },
       });

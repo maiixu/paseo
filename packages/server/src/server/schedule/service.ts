@@ -394,6 +394,13 @@ export class ScheduleService {
     return [...schedule.runs].sort((left, right) => left.startedAt.localeCompare(right.startedAt));
   }
 
+  async end(id: string): Promise<StoredSchedule> {
+    const ended = await this.store.update(id, (schedule) =>
+      schedule.status === "completed" ? schedule : completeSchedule(schedule, this.now()),
+    );
+    return requireSchedule(ended, id);
+  }
+
   async pause(id: string): Promise<StoredSchedule> {
     const paused = await this.store.update(id, (schedule) => {
       if (schedule.status === "completed") {
@@ -706,6 +713,10 @@ export class ScheduleService {
       error: null,
     };
     const scheduleWithRun = await this.appendRunningRun(schedule.id, runningRun);
+    if (!scheduleWithRun) {
+      this.runningScheduleIds.delete(schedule.id);
+      return;
+    }
 
     try {
       const result = await this.runner(scheduleWithRun, runId);
@@ -738,13 +749,17 @@ export class ScheduleService {
   private async appendRunningRun(
     scheduleId: string,
     runningRun: ScheduleRun,
-  ): Promise<StoredSchedule> {
-    const updated = await this.store.update(scheduleId, (schedule) => ({
-      ...schedule,
-      updatedAt: runningRun.startedAt,
-      runs: [...schedule.runs, runningRun],
-    }));
-    return requireSchedule(updated, scheduleId);
+  ): Promise<StoredSchedule | null> {
+    let appended = false;
+    const updated = await this.store.update(scheduleId, (schedule) => {
+      // End and run admission share the store queue. A stale tick must not
+      // start work after End has committed; an admitted run may finish.
+      if (schedule.status === "completed") return schedule;
+      appended = true;
+      return { ...schedule, updatedAt: runningRun.startedAt, runs: [...schedule.runs, runningRun] };
+    });
+    const current = requireSchedule(updated, scheduleId);
+    return appended ? current : null;
   }
 
   private async finishRun(params: {

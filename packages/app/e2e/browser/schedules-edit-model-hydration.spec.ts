@@ -1,3 +1,6 @@
+import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
+import { connectDaemonClient } from "../support/helpers/daemon-client-loader";
+import { seedMockAgentWorkspace } from "../support/helpers/mock-agent";
 import { expect, test } from "../support/fixtures";
 import { gotoAppShell } from "../support/helpers/app";
 import {
@@ -10,6 +13,13 @@ import { seedWorkspace, type SeededWorkspace } from "../support/helpers/seed-cli
 import { expectSettled, expectStableHeight } from "../support/helpers/settled";
 import { waitForSidebarHydration } from "../support/helpers/workspace-ui";
 import { buildSchedulesRoute } from "../../src/utils/host-routes";
+
+test.use({
+  e2eDaemonConfig: {
+    version: 1,
+    agents: { skills: { selection: { mode: "custom", skills: [] } } },
+  },
+});
 
 interface ScheduleSeedClient {
   scheduleCreate(input: {
@@ -193,4 +203,82 @@ test.describe("Schedules", () => {
     await expect(page.getByTestId("schedule-mode-trigger")).toHaveCount(0);
     await expect(page.getByTestId("cadence-interval-value")).toHaveCount(0);
   });
+});
+
+for (const kind of ["schedule", "heartbeat"] as const) {
+  test(`End ${kind} retains run history and moves it to Ended`, async ({ page }) => {
+    const workspace = await seedMockAgentWorkspace({
+      repoPrefix: "end-schedule-",
+      title: "End fixture",
+    });
+    const client = await connectDaemonClient<DaemonClient>({ clientIdPrefix: "end-fixture" });
+    let id: string | undefined;
+    try {
+      const target =
+        kind === "heartbeat"
+          ? { type: "agent" as const, agentId: workspace.agentId }
+          : {
+              type: "new-agent" as const,
+              config: {
+                provider: "mock" as const,
+                cwd: workspace.cwd,
+                model: "e2e-fast-stream",
+                modeId: "load-test",
+                archiveOnFinish: false,
+              },
+            };
+      const created = await client.scheduleCreate({
+        name: `End ${kind} fixture`,
+        prompt: "Reply done",
+        cadence: { type: "cron", expression: "0 0 1 1 *" },
+        target,
+      });
+      if (!created.schedule) throw new Error(created.error ?? "Missing fixture schedule");
+      id = created.schedule.id;
+      const ran = await client.scheduleRunOnce({ id });
+      if (!ran.schedule) throw new Error(ran.error ?? "Missing run history");
+      expect(ran.schedule.runs).toHaveLength(1);
+      await page.goto(buildSchedulesRoute());
+      const row = page.getByTestId(`schedule-row-${id}`);
+      await expect(row).toBeVisible();
+      await page.getByTestId(`schedule-kebab-${id}`).click();
+      await page.getByTestId(`schedule-menu-end-${id}`).click();
+      await expect(row).toHaveCount(0);
+      await page.getByRole("button", { name: "Ended", exact: true }).click();
+      await expect(row).toBeVisible();
+      await expect(row).toContainText("Finished");
+      const ended = await client.scheduleInspect({ id });
+      expect(ended.schedule).toMatchObject({
+        status: "completed",
+        nextRunAt: null,
+        runs: ran.schedule.runs,
+      });
+    } finally {
+      if (id) await client.scheduleDelete({ id });
+      await client.close();
+      await workspace.cleanup();
+    }
+  });
+}
+
+test("End reports a real server failure without a success message", async ({ page }) => {
+  const workspace = await seedWorkspace({ repoPrefix: "end-failure-" });
+  const client = await connectDaemonClient<DaemonClient>({ clientIdPrefix: "end-failure" });
+  let id: string | undefined;
+  try {
+    id = await seedMockSchedule(workspace, "Removed End fixture");
+    await page.goto(buildSchedulesRoute());
+    await expect(page.getByTestId(`schedule-row-${id}`)).toBeVisible();
+    await client.scheduleDelete({ id });
+    await page.getByTestId(`schedule-kebab-${id}`).click();
+    await page.getByTestId(`schedule-menu-end-${id}`).click();
+    await expect(page.getByText(`Schedule not found: ${id}`, { exact: false })).toBeVisible();
+    await expect(page.getByText("Schedule ended. Run history kept.", { exact: true })).toHaveCount(
+      0,
+    );
+  } finally {
+    if (id) await client.scheduleDelete({ id }).catch(() => undefined);
+    await client.close();
+    await workspace.cleanup();
+  }
 });

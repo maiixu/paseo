@@ -47,6 +47,7 @@ import {
   ScheduleInspectRequestSchema,
   ScheduleLogsRequestSchema,
   SchedulePauseRequestSchema,
+  ScheduleEndRequestSchema,
   ScheduleResumeRequestSchema,
   ScheduleDeleteRequestSchema,
   ScheduleRunOnceRequestSchema,
@@ -56,6 +57,7 @@ import {
   ScheduleInspectResponseSchema,
   ScheduleLogsResponseSchema,
   SchedulePauseResponseSchema,
+  ScheduleEndResponseSchema,
   ScheduleResumeResponseSchema,
   ScheduleDeleteResponseSchema,
   ScheduleRunOnceResponseSchema,
@@ -3349,6 +3351,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   ScheduleInspectRequestSchema,
   ScheduleLogsRequestSchema,
   SchedulePauseRequestSchema,
+  ScheduleEndRequestSchema,
   ScheduleResumeRequestSchema,
   ScheduleDeleteRequestSchema,
   ScheduleRunOnceRequestSchema,
@@ -3672,6 +3675,8 @@ export const ServerInfoStatusPayloadSchema = z
         selectiveAgentTimeline: z.boolean().optional(),
         explicitEventSubscriptions: z.boolean().optional(),
         ownedSubscriptions: z.boolean().optional(),
+        // COMPAT(scheduleEnd): personal v0.9.2, remove once daemon floor includes schedule.end (after 2027-03-26).
+        scheduleEnd: z.boolean().optional(),
         // COMPAT(canonicalSubmittedPrompts): added in v0.2.6, remove gate after 2027-01-30.
         canonicalSubmittedPrompts: z.boolean().optional(),
         // COMPAT(agentTurnIdentity): accept peers that observed pre-release v0.2.6 through 2027-01-31.
@@ -6950,6 +6955,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   ScheduleInspectResponseSchema,
   ScheduleLogsResponseSchema,
   SchedulePauseResponseSchema,
+  ScheduleEndResponseSchema,
   ScheduleResumeResponseSchema,
   ScheduleDeleteResponseSchema,
   ScheduleRunOnceResponseSchema,

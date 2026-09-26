@@ -1,3 +1,4 @@
+import { useToast } from "@/contexts/toast-context";
 import { useCallback, useState, type ReactElement } from "react";
 import { View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
@@ -74,6 +75,7 @@ function SchedulesTableRow({
   const { schedule } = row;
   const { id, serverId } = schedule;
   const mutations = useScheduleMutations({ serverId });
+  const toast = useToast();
   const [pending, setPending] = useState<ScheduleRowPending>(NO_PENDING);
 
   const runAction = useCallback(
@@ -81,9 +83,8 @@ function SchedulesTableRow({
       setPending((current) => ({ ...current, [key]: true }));
       try {
         await action();
-      } catch {
-        // Mutations roll back their own optimistic cache writes on error and
-        // re-fetch on settle; surfacing per-row toasts here is out of scope.
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Schedule action failed. Try again.");
       } finally {
         setPending((current) => {
           const next = { ...current };
@@ -92,12 +93,21 @@ function SchedulesTableRow({
         });
       }
     },
-    [],
+    [toast],
   );
 
   const handleEdit = useCallback(() => {
     onEditSchedule(schedule);
   }, [onEditSchedule, schedule]);
+
+  const handleEnd = useCallback(() => {
+    void runAction("end", async () => {
+      await mutations.endSchedule(id);
+      toast.show(`${scheduleProductName(schedule)} ended. Run history kept.`, {
+        variant: "success",
+      });
+    });
+  }, [runAction, mutations, id, schedule, toast]);
 
   const handlePause = useCallback(() => {
     void runAction("pause", () => mutations.pauseSchedule(id));
@@ -140,6 +150,7 @@ function SchedulesTableRow({
       pending={pending}
       onEdit={handleEdit}
       onPause={handlePause}
+      onEnd={handleEnd}
       onResume={handleResume}
       onRunNow={handleRunNow}
       onDelete={handleDelete}

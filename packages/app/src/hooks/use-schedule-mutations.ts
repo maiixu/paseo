@@ -26,12 +26,14 @@ export interface UseScheduleMutationsResult {
   createSchedule: (input: CreateScheduleInput) => Promise<void>;
   updateSchedule: (input: UpdateScheduleInput) => Promise<void>;
   pauseSchedule: (id: string) => Promise<void>;
+  endSchedule: (id: string) => Promise<void>;
   resumeSchedule: (id: string) => Promise<void>;
   deleteSchedule: (id: string) => Promise<void>;
   runScheduleNow: (id: string) => Promise<void>;
   isCreating: boolean;
   isUpdating: boolean;
   isPausing: boolean;
+  isEnding: boolean;
   isResuming: boolean;
   isDeleting: boolean;
   isRunningNow: boolean;
@@ -139,6 +141,15 @@ export function useScheduleMutations({
     onSettled: invalidate,
   });
 
+  const endMutation = useMutation({
+    mutationFn: async (id: string): Promise<void> => {
+      const client = requireClient(serverId, t("common.errors.daemonClientUnavailable"));
+      const payload = await client.scheduleEnd({ id });
+      if (payload.error) throw new Error(payload.error);
+    },
+    onSettled: invalidate,
+  });
+
   const pauseMutation = useMutation({
     mutationFn: async (id: string): Promise<void> => {
       const client = requireClient(serverId, t("common.errors.daemonClientUnavailable"));
@@ -230,6 +241,13 @@ export function useScheduleMutations({
     [updateMutation],
   );
 
+  const endSchedule = useCallback(
+    async (id: string): Promise<void> => {
+      await endMutation.mutateAsync(id);
+    },
+    [endMutation],
+  );
+
   const pauseSchedule = useCallback(
     async (id: string): Promise<void> => {
       await pauseMutation.mutateAsync(id);
@@ -262,12 +280,14 @@ export function useScheduleMutations({
     createSchedule,
     updateSchedule,
     pauseSchedule,
+    endSchedule,
     resumeSchedule,
     deleteSchedule,
     runScheduleNow,
     isCreating: createMutation.isPending,
     isUpdating: updateMutation.isPending,
     isPausing: pauseMutation.isPending,
+    isEnding: endMutation.isPending,
     isResuming: resumeMutation.isPending,
     isDeleting: deleteMutation.isPending,
     isRunningNow: runNowMutation.isPending,

@@ -556,6 +556,10 @@ type ScheduleLogsPayload = Extract<
   SessionOutboundMessage,
   { type: "schedule/logs/response" }
 >["payload"];
+type ScheduleEndPayload = Extract<
+  SessionOutboundMessage,
+  { type: "schedule.end.response" }
+>["payload"];
 type SchedulePausePayload = Extract<
   SessionOutboundMessage,
   { type: "schedule/pause/response" }
@@ -5878,6 +5882,18 @@ export class DaemonClient {
         scheduleId: options.id,
       },
       responseType: "schedule/logs/response",
+    });
+  }
+
+  async scheduleEnd(options: InspectScheduleOptions): Promise<ScheduleEndPayload> {
+    // COMPAT(scheduleEnd): personal v0.9.2, remove once daemon floor includes schedule.end (after 2027-03-26).
+    if (this.lastServerInfoMessage?.features?.scheduleEnd !== true) {
+      throw new Error("Update the host to end schedules while keeping their history.");
+    }
+    return this.sendCorrelatedSessionRequest({
+      requestId: options.requestId,
+      message: { type: "schedule.end.request", scheduleId: options.id },
+      responseType: "schedule.end.response",
     });
   }
 

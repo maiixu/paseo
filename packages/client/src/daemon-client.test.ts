@@ -1720,6 +1720,55 @@ test("honors explicit getDaemonPairingOffer timeout below the session RPC defaul
   await expect(responsePromise).rejects.toThrow("Timeout waiting for message (1500ms)");
 });
 
+test("schedule End requires host support before sending a request", async () => {
+  const mock = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "end-test",
+    logger: createMockLogger(),
+    reconnect: { enabled: false },
+    transportFactory: () => mock.transport,
+  });
+  clients.push(client);
+  const connecting = client.connect();
+  mock.triggerOpen();
+  await connecting;
+  await expect(client.scheduleEnd({ id: "s1" })).rejects.toThrow("Update the host");
+  expect(mock.sent).toEqual([]);
+});
+
+test("schedule End correlates the response on a supported host", async () => {
+  const mock = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "end-test",
+    logger: createMockLogger(),
+    reconnect: { enabled: false },
+    transportFactory: () => mock.transport,
+  });
+  clients.push(client);
+  const connecting = client.connect();
+  mock.triggerOpen({ features: { scheduleEnd: true } });
+  await connecting;
+  const response = client.scheduleEnd({ id: "s1", requestId: "end-request" });
+  expect(parseSentFrame(mock.sent[0])).toEqual({
+    type: "schedule.end.request",
+    requestId: "end-request",
+    scheduleId: "s1",
+  });
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "schedule.end.response",
+      payload: { requestId: "end-request", schedule: null, error: "Schedule not found: s1" },
+    }),
+  );
+  await expect(response).resolves.toEqual({
+    requestId: "end-request",
+    schedule: null,
+    error: "Schedule not found: s1",
+  });
+});
+
 test("gates config reload on the daemon capability", async () => {
   const mock = createMockTransport();
   const client = new DaemonClient({

@@ -5,6 +5,7 @@ import { runCreateCommand } from "./create.js";
 import { runLsCommand } from "./ls.js";
 import { runInspectCommand } from "./inspect.js";
 import { runLogsCommand } from "./logs.js";
+import { runEndCommand } from "./end.js";
 import { runPauseCommand } from "./pause.js";
 import { runResumeCommand } from "./resume.js";
 import { runDeleteCommand } from "./delete.js";
@@ -53,6 +54,13 @@ export function createScheduleCommand(): Command {
       .description("Show recent schedule run logs")
       .argument("<id>", "Schedule ID"),
   ).action(withOutput(runLogsCommand));
+
+  addJsonAndDaemonHostOptions(
+    schedule
+      .command("end")
+      .description("End a schedule and preserve its run history")
+      .argument("<id>", "Schedule ID"),
+  ).action(withOutput(runEndCommand));
 
   addJsonAndDaemonHostOptions(
     schedule.command("pause").description("Pause a schedule").argument("<id>", "Schedule ID"),

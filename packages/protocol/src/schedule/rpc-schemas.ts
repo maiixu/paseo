@@ -179,3 +179,18 @@ export const ScheduleUpdateResponseSchema = z.object({
     error: z.string().nullable(),
   }),
 });
+
+export const ScheduleEndRequestSchema = z.object({
+  type: z.literal("schedule.end.request"),
+  requestId: z.string(),
+  scheduleId: z.string(),
+});
+
+export const ScheduleEndResponseSchema = z.object({
+  type: z.literal("schedule.end.response"),
+  payload: z.object({
+    requestId: z.string(),
+    schedule: ScheduleSummarySchema.nullable(),
+    error: z.string().nullable(),
+  }),
+});

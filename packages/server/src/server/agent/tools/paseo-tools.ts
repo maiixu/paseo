@@ -2635,6 +2635,23 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
   );
 
   registerTool(
+    "end_heartbeat",
+    {
+      title: "End heartbeat",
+      description:
+        "End one of your heartbeats and preserve its run history. A current run may finish.",
+      inputSchema: { id: z.string().min(1) },
+      outputSchema: { success: z.boolean() },
+    },
+    async ({ id }) => {
+      if (!scheduleService) throw new Error("Schedule service is not configured");
+      await requireCallerHeartbeat(id);
+      await scheduleService.end(id);
+      return { content: [], structuredContent: ensureValidJson({ success: true }) };
+    },
+  );
+
+  registerTool(
     "delete_heartbeat",
     {
       title: "Delete heartbeat",
@@ -2752,6 +2769,22 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         content: [],
         structuredContent: ensureValidJson({ success: true }),
       };
+    },
+  );
+
+  registerTool(
+    "end_schedule",
+    {
+      title: "End schedule",
+      description: "End a schedule and preserve its run history. A current run may finish.",
+      inputSchema: { id: z.string().min(1) },
+      outputSchema: { success: z.boolean() },
+    },
+    async ({ id }) => {
+      if (!scheduleService) throw new Error("Schedule service is not configured");
+      await requireScheduleTarget(id, "new-agent");
+      await scheduleService.end(id);
+      return { content: [], structuredContent: ensureValidJson({ success: true }) };
     },
   );
 

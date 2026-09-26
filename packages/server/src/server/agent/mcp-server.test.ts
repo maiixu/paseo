@@ -4409,7 +4409,7 @@ describe("create_heartbeat MCP tool", () => {
 describe("heartbeat ownership MCP tools", () => {
   const logger = createTestLogger();
 
-  it("deletes the caller's heartbeat", async () => {
+  it.each(["delete", "end"])("%s preserves caller heartbeat ownership", async (operation) => {
     const { agentManager, agentStorage } = createTestDeps();
     const heartbeat = createStoredSchedule({
       prompt: "check status",
@@ -4424,18 +4424,18 @@ describe("heartbeat ownership MCP tools", () => {
       providerSnapshotManager: createOpenCodeManager().manager,
       scheduleService: {
         inspect,
-        delete: deleteSchedule,
+        [operation]: deleteSchedule,
       } as unknown as ScheduleService,
       callerAgentId: "parent-agent",
       logger,
     });
 
-    await registeredTool(server, "delete_heartbeat").handler({ id: heartbeat.id });
+    await registeredTool(server, `${operation}_heartbeat`).handler({ id: heartbeat.id });
 
     expect(deleteSchedule).toHaveBeenCalledWith(heartbeat.id);
   });
 
-  it("rejects another agent's heartbeat", async () => {
+  it.each(["delete", "end"])("%s rejects another agent's heartbeat", async (operation) => {
     const { agentManager, agentStorage } = createTestDeps();
     const foreignHeartbeat = createStoredSchedule({
       prompt: "foreign",
@@ -4448,14 +4448,14 @@ describe("heartbeat ownership MCP tools", () => {
       providerSnapshotManager: createOpenCodeManager().manager,
       scheduleService: {
         inspect: vi.fn(async () => foreignHeartbeat),
-        delete: vi.fn(),
+        [operation]: vi.fn(),
       } as unknown as ScheduleService,
       callerAgentId: "parent-agent",
       logger,
     });
 
     await expect(
-      registeredTool(server, "delete_heartbeat").handler({ id: foreignHeartbeat.id }),
+      registeredTool(server, `${operation}_heartbeat`).handler({ id: foreignHeartbeat.id }),
     ).rejects.toThrow("does not belong to caller");
   });
 });

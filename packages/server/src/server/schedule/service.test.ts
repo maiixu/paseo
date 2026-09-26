@@ -314,6 +314,119 @@ describe("ScheduleService", () => {
     await rm(tempDir, { recursive: true, force: true });
   });
 
+  test.each(["new-agent", "agent"] as const)(
+    "ending a %s schedule preserves history and prevents another run",
+    async (targetType) => {
+      const runner = vi.fn(async () => ({ agentId: null, output: "retained result" }));
+      const service = createScheduleService({
+        paseoHome: tempDir,
+        logger: createTestLogger(),
+        agentManager: new AgentManager({ logger: createTestLogger() }),
+        agentStorage,
+        providerSnapshotManager: NO_UNATTENDED_SCHEDULE_POLICY,
+        now: () => now,
+        runner,
+      });
+      const agentId = "00000000-0000-4000-8000-000000000001";
+      await agentStorage.upsert(
+        buildAgentRecord({ id: agentId, cwd: tempDir, iso: now.toISOString() }),
+      );
+      const target =
+        targetType === "agent"
+          ? { type: "agent" as const, agentId }
+          : { type: "new-agent" as const, config: { provider: "claude" as const, cwd: tempDir } };
+      const created = await service.create({
+        prompt: "Review",
+        cadence: { type: "every", everyMs: 60_000 },
+        target,
+      });
+      await service.runOnce(created.id);
+      const before = await service.inspect(created.id);
+      await service.pause(created.id);
+      const ended = await service.end(created.id);
+      expect(ended).toMatchObject({
+        status: "completed",
+        nextRunAt: null,
+        pausedAt: null,
+        runs: before.runs,
+      });
+      expect(await service.end(created.id)).toEqual(ended);
+      now = new Date("2026-01-02T00:00:00Z");
+      await service.tick();
+      expect(runner).toHaveBeenCalledTimes(1);
+      await expect(service.resume(created.id)).rejects.toThrow("already completed");
+      await expect(service.runOnce(created.id)).rejects.toThrow("already completed");
+    },
+  );
+
+  test("ending during a run lets its result finish without scheduling another", async () => {
+    const started = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const runner = vi.fn(async () => {
+      started.resolve();
+      await finish.promise;
+      return { agentId: null, output: "finished after End" };
+    });
+    const service = createScheduleService({
+      paseoHome: tempDir,
+      logger: createTestLogger(),
+      agentManager: new AgentManager({ logger: createTestLogger() }),
+      agentStorage,
+      providerSnapshotManager: NO_UNATTENDED_SCHEDULE_POLICY,
+      now: () => now,
+      runner,
+    });
+    const created = await service.create({
+      prompt: "Review",
+      cadence: { type: "every", everyMs: 60_000 },
+      target: { type: "new-agent", config: { provider: "claude", cwd: tempDir } },
+    });
+    const running = service.runOnce(created.id);
+    await started.promise;
+    await service.end(created.id);
+    finish.resolve();
+    await running;
+    const ended = await service.inspect(created.id);
+    expect(ended.status).toBe("completed");
+    expect(ended.nextRunAt).toBeNull();
+    expect(ended.runs).toHaveLength(1);
+    expect(ended.runs[0]).toMatchObject({ status: "succeeded", output: "finished after End" });
+    now = new Date("2026-01-02T00:00:00Z");
+    await service.tick();
+    expect(runner).toHaveBeenCalledTimes(1);
+  });
+
+  test("End wins over a run admitted from an older snapshot", async () => {
+    const runner = vi.fn(async () => ({ agentId: null, output: "must not run" }));
+    const service = createScheduleService({
+      paseoHome: tempDir,
+      logger: createTestLogger(),
+      agentManager: new AgentManager({ logger: createTestLogger() }),
+      agentStorage,
+      providerSnapshotManager: NO_UNATTENDED_SCHEDULE_POLICY,
+      now: () => now,
+      runner,
+    });
+    const created = await service.create({
+      prompt: "Review",
+      cadence: { type: "every", everyMs: 60_000 },
+      target: { type: "new-agent", config: { provider: "claude", cwd: tempDir } },
+    });
+    const inspect = service.inspect.bind(service);
+    vi.spyOn(service, "inspect").mockImplementationOnce(async (id) => {
+      const stale = await inspect(id);
+      await service.end(id);
+      return stale;
+    });
+    await service.runOnce(created.id);
+    expect(runner).not.toHaveBeenCalled();
+    expect(await service.inspect(created.id)).toMatchObject({
+      status: "completed",
+      nextRunAt: null,
+      runs: [],
+    });
+  });
+
   test("ticks due schedules and records run history on disk", async () => {
     const service = createScheduleService({
       paseoHome: tempDir,

@@ -127,6 +127,26 @@ async function runUpdateHeartbeat(
   }
 }
 
+async function runEndHeartbeat(
+  id: string,
+  options: HeartbeatOptions,
+  _command: Command,
+): Promise<SingleResult<ScheduleRow>> {
+  const agentId = requireCallerAgentId();
+  const { client } = await connectScheduleClient(options.daemonTarget);
+  try {
+    await requireOwnedHeartbeat(client, id, agentId);
+    const payload = await client.scheduleEnd({ id });
+    if (payload.error || !payload.schedule)
+      throw new Error(payload.error ?? `Heartbeat not found: ${id}`);
+    return { type: "single", data: toScheduleRow(payload.schedule), schema: scheduleSchema };
+  } catch (error) {
+    throw toScheduleCommandError("HEARTBEAT_END_FAILED", "end heartbeat", error);
+  } finally {
+    await client.close().catch(() => undefined);
+  }
+}
+
 async function runDeleteHeartbeat(
   id: string,
   options: HeartbeatOptions,
@@ -176,5 +196,11 @@ export function createHeartbeatCommand(): Command {
   addJsonAndDaemonHostOptions(
     heartbeat.command("delete").description("Delete a heartbeat").argument("<id>", "Heartbeat ID"),
   ).action(withOutput(runDeleteHeartbeat));
+  addJsonAndDaemonHostOptions(
+    heartbeat
+      .command("end")
+      .description("End a heartbeat and preserve its run history")
+      .argument("<id>", "Heartbeat ID"),
+  ).action(withOutput(runEndHeartbeat));
   return heartbeat;
 }

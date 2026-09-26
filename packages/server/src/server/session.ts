@@ -3027,6 +3027,8 @@ export class Session {
         return this.scheduleSession.handleScheduleInspectRequest(msg);
       case "schedule/logs":
         return this.scheduleSession.handleScheduleLogsRequest(msg);
+      case "schedule.end.request":
+        return this.scheduleSession.handleScheduleEndRequest(msg);
       case "schedule/pause":
         return this.scheduleSession.handleSchedulePauseRequest(msg);
       case "schedule/resume":

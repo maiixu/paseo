@@ -163,6 +163,7 @@ export interface ScheduleDaemonClient {
   scheduleInspect(input: { id: string }): Promise<ScheduleInspectPayload>;
   scheduleLogs(input: { id: string }): Promise<ScheduleLogsPayload>;
   schedulePause(input: { id: string }): Promise<SchedulePausePayload>;
+  scheduleEnd(input: { id: string }): Promise<SchedulePausePayload>;
   scheduleResume(input: { id: string }): Promise<ScheduleResumePayload>;
   scheduleDelete(input: { id: string }): Promise<ScheduleDeletePayload>;
   scheduleRunOnce(input: { id: string }): Promise<ScheduleRunOncePayload>;

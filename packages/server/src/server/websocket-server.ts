@@ -1681,6 +1681,7 @@ export class VoiceAssistantWebSocketServer {
       ...(this.serverCapabilities ? { capabilities: this.serverCapabilities } : {}),
       features: {
         ownedSubscriptions: true,
+        scheduleEnd: true,
         agentRequestReceipts: true,
         workspaceRequestReceipts: true,
         creationLifecycle: true,

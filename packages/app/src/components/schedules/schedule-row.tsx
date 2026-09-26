@@ -1,4 +1,4 @@
-import { MoreVertical, Pause, Pencil, Play, RotateCw, Trash2 } from "lucide-react-native";
+import { MoreVertical, Square, Pause, Pencil, Play, RotateCw, Trash2 } from "lucide-react-native";
 import { useCallback, useState, type ReactElement } from "react";
 import { Pressable, Text, View, type PressableStateCallbackType } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
@@ -28,6 +28,7 @@ import type { ScheduleSummary } from "@getpaseo/protocol/schedule/types";
 // Themed lucide wrappers — module-scope so only the icon re-renders on theme
 // change (never call useUnistyles in render). See docs/unistyles.md.
 const ThemedPencil = withUnistyles(Pencil);
+const ThemedSquare = withUnistyles(Square);
 const ThemedPause = withUnistyles(Pause);
 const ThemedPlay = withUnistyles(Play);
 const ThemedRotateCw = withUnistyles(RotateCw);
@@ -45,6 +46,7 @@ const PROVIDER_ICON_SIZE = 16;
 // and the row reflects in-flight state without owning the mutation itself.
 export interface ScheduleRowPending {
   pause?: boolean;
+  end?: boolean;
   resume?: boolean;
   runNow?: boolean;
   delete?: boolean;
@@ -53,6 +55,7 @@ export interface ScheduleRowPending {
 export interface ScheduleRowActions {
   onEdit: () => void;
   onPause: () => void;
+  onEnd: () => void;
   onResume: () => void;
   onRunNow: () => void;
   onDelete: () => void;
@@ -159,6 +162,7 @@ export function ScheduleRow({
   onResume,
   onRunNow,
   onDelete,
+  onEnd,
 }: ScheduleRowProps): ReactElement {
   const isCompact = useIsCompactFormFactor();
   const [isHovered, setIsHovered] = useState(false);
@@ -223,6 +227,7 @@ export function ScheduleRow({
             onResume={onResume}
             onRunNow={onRunNow}
             onDelete={onDelete}
+            onEnd={onEnd}
           />
         </View>
       </Pressable>
@@ -234,6 +239,7 @@ const editLeading = <ThemedPencil size={MENU_ICON_SIZE} uniProps={mutedColorMapp
 const pauseLeading = <ThemedPause size={MENU_ICON_SIZE} uniProps={mutedColorMapping} />;
 const resumeLeading = <ThemedPlay size={MENU_ICON_SIZE} uniProps={mutedColorMapping} />;
 const runLeading = <ThemedRotateCw size={MENU_ICON_SIZE} uniProps={mutedColorMapping} />;
+const endLeading = <ThemedSquare size={MENU_ICON_SIZE} uniProps={mutedColorMapping} />;
 const deleteLeading = <ThemedTrash2 size={MENU_ICON_SIZE} uniProps={destructiveColorMapping} />;
 
 function ScheduleExecutionMenuItems({
@@ -314,9 +320,10 @@ function ScheduleKebabMenu({
   onResume,
   onRunNow,
   onDelete,
+  onEnd,
 }: Pick<
   ScheduleRowProps,
-  "schedule" | "pending" | "onEdit" | "onPause" | "onResume" | "onRunNow" | "onDelete"
+  "schedule" | "pending" | "onEdit" | "onPause" | "onResume" | "onRunNow" | "onDelete" | "onEnd"
 > & {
   canRun: boolean;
 }): ReactElement {
@@ -349,6 +356,16 @@ function ScheduleKebabMenu({
           onResume={onResume}
           onRunNow={onRunNow}
         />
+        <DropdownMenuItem
+          leading={endLeading}
+          disabled={schedule.status === "completed"}
+          status={pending?.end ? "pending" : "idle"}
+          pendingLabel="Ending..."
+          onSelect={onEnd}
+          testID={`schedule-menu-end-${schedule.id}`}
+        >
+          End {productNameLower}
+        </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem
           leading={deleteLeading}
