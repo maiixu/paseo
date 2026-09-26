@@ -46,7 +46,8 @@ type FormState =
   | { mode: "edit"; serverId: string; schedule: ScheduleSummary };
 
 const STATUS_FILTER_OPTIONS: { value: ScheduleBucket; label: string; testID: string }[] = [
-  { value: "runnable", label: "Active", testID: "schedules-filter-active" },
+  { value: "active", label: "Active", testID: "schedules-filter-active" },
+  { value: "paused", label: "Paused", testID: "schedules-filter-paused" },
   { value: "ended", label: "Ended", testID: "schedules-filter-ended" },
 ];
 
@@ -93,7 +94,7 @@ function SchedulesScreenContent(): ReactElement {
 
   const [form, setForm] = useState<FormState>({ mode: "closed" });
   const [selectedHost, setSelectedHost] = useState(ALL_HOSTS_OPTION_ID);
-  const [statusFilter, setStatusFilter] = useState<ScheduleBucket>("runnable");
+  const [statusFilter, setStatusFilter] = useState<ScheduleBucket>("active");
 
   useEffect(() => {
     if (
@@ -254,8 +255,8 @@ function SchedulesScreenBody({
   let schedulesContent: ReactElement;
   if (rows.length > 0) {
     schedulesContent = <SchedulesTable rows={rows} onEditSchedule={onEdit} />;
-  } else if (statusFilter === "ended") {
-    schedulesContent = <SchedulesEndedEmptyState />;
+  } else if (statusFilter !== "active") {
+    schedulesContent = <SchedulesStatusEmptyState status={statusFilter} />;
   } else {
     schedulesContent = (
       <View style={styles.filterEmpty}>
@@ -330,12 +331,14 @@ function SchedulesEmptyState({
   );
 }
 
-function SchedulesEndedEmptyState(): ReactElement {
+function SchedulesStatusEmptyState({ status }: { status: "paused" | "ended" }): ReactElement {
   return (
     <View style={styles.filterEmpty}>
       <View style={styles.endedEmptyState}>
         <CalendarClock size={styles.emptyIcon.width} color={styles.emptyIcon.color} />
-        <Text style={styles.emptyTitle}>No ended schedules</Text>
+        <Text style={styles.emptyTitle}>
+          {status === "paused" ? "No paused schedules" : "No ended schedules"}
+        </Text>
       </View>
     </View>
   );

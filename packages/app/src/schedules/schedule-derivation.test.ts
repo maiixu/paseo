@@ -43,20 +43,21 @@ function resolve(
 }
 
 describe("resolveSchedule state", () => {
-  it("keeps active and paused schedules runnable", () => {
+  it("separates active and paused schedules", () => {
     expect(resolve(makeSchedule({ status: "active" })).state).toBe("active");
     expect(resolve(makeSchedule({ status: "paused" })).state).toBe("paused");
-    expect(scheduleBucket("active")).toBe("runnable");
-    expect(scheduleBucket("paused")).toBe("runnable");
+    expect(scheduleBucket("active")).toBe("active");
+    expect(scheduleBucket("paused")).toBe("paused");
   });
 
-  it("treats a past expiresAt as expired regardless of status", () => {
-    const result = resolve(
-      makeSchedule({ status: "active", expiresAt: "2026-07-01T00:00:00.000Z" }),
-    );
-    expect(result.state).toBe("expired");
-    expect(result.bucket).toBe("ended");
-  });
+  it.each(["active", "paused", "completed"] as const)(
+    "keeps expired %s schedules under Ended",
+    (status) => {
+      const result = resolve(makeSchedule({ status, expiresAt: "2026-07-01T00:00:00.000Z" }));
+      expect(result.state).toBe("expired");
+      expect(result.bucket).toBe("ended");
+    },
+  );
 
   it("ignores an unparseable expiresAt", () => {
     expect(resolve(makeSchedule({ expiresAt: "not-a-date" })).state).toBe("active");

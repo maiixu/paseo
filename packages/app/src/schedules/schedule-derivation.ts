@@ -6,7 +6,7 @@ import { describeScheduleCwd } from "@/schedules/schedule-project-targets";
 // spell out in a single field.
 export type ScheduleDerivedState = "active" | "paused" | "expired" | "finished" | "targetGone";
 
-export type ScheduleBucket = "runnable" | "ended";
+export type ScheduleBucket = "active" | "paused" | "ended";
 
 export interface ScheduleTargetAgent {
   title: string | null;
@@ -96,7 +96,7 @@ function deriveState(input: ResolveScheduleInput): ScheduleDerivedState {
 }
 
 export function scheduleBucket(state: ScheduleDerivedState): ScheduleBucket {
-  return state === "active" || state === "paused" ? "runnable" : "ended";
+  return state === "active" || state === "paused" ? state : "ended";
 }
 
 export function resolveSchedule(input: ResolveScheduleInput): ResolvedSchedule {
