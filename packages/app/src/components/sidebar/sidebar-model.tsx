@@ -1,5 +1,4 @@
-import { useResponsibilityOrderStore } from "@/managed-threads/order";
-import { useManagedThreadsStore } from "@/managed-threads/store";
+import { subscribeSidebarViewChanges } from "@/stores/sidebar-view-sync";
 import React, { createContext, useContext, useEffect, useMemo, type ReactNode } from "react";
 import {
   useSidebarWorkspacesList,
@@ -56,7 +55,10 @@ export function SidebarModelProvider({
   active?: boolean;
   children: ReactNode;
 }) {
-  const managedPresentations = useManagedThreadsStore((s) => s.presentations);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    return subscribeSidebarViewChanges(window, useSidebarViewStore.persist.rehydrate);
+  }, []);
   const list = useSidebarWorkspacesList({ enabled: active });
   const groupMode = useSidebarViewStore((state) => state.groupMode);
   const labelFilter = useSidebarViewStore((state) => state.labelFilter);
@@ -142,7 +144,6 @@ export function SidebarModelProvider({
     visibleWorkspaceKeys,
   ]);
   const pinnedKeys = usePinnedSidebarKeys(filteredProjects);
-  const responsibilityOrder = useResponsibilityOrderStore((state) => state.orders);
   const projectionInput = useMemo(
     () => ({
       projects: filteredProjects,
@@ -151,8 +152,6 @@ export function SidebarModelProvider({
       workspaceEntriesByKey: filteredWorkspaceEntriesByKey,
       projectNamesByViewKey: list.projectNamesByViewKey,
       groupMode,
-      managedPresentations,
-      responsibilityOrder,
       pinnedCollapsed,
       collapsedProjectKeys,
       collapsedWorkspaceGroupKeys,
@@ -160,8 +159,6 @@ export function SidebarModelProvider({
     [
       collapsedProjectKeys,
       collapsedWorkspaceGroupKeys,
-      managedPresentations,
-      responsibilityOrder,
       groupMode,
       list.projectNamesByViewKey,
       filteredProjects,

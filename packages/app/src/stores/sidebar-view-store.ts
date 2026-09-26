@@ -5,12 +5,13 @@ import { z } from "zod";
 import { workspaceLabelKey } from "@getpaseo/protocol/workspace-labels";
 import { createValidatedPersistStorage } from "@/storage/validated-persist-storage";
 
-export type SidebarGroupMode = "project" | "status" | "responsibility";
+export type SidebarGroupMode = "project" | "status";
 
-export const SIDEBAR_VIEW_STORAGE_KEY = "sidebar-view-responsibility-v1";
+export const SIDEBAR_VIEW_STORAGE_KEY = "sidebar-view-project-v1";
+const RESPONSIBILITY_SIDEBAR_VIEW_STORAGE_KEY = "sidebar-view-responsibility-v1";
 const PREVIOUS_SIDEBAR_VIEW_STORAGE_KEY = "sidebar-view";
 const LEGACY_SIDEBAR_GROUP_MODE_STORAGE_KEY = "sidebar-group-mode";
-const SIDEBAR_VIEW_STORE_VERSION = 6;
+const SIDEBAR_VIEW_STORE_VERSION = 7;
 
 /**
  * The key standing for "this workspace carries no labels at all".
@@ -142,10 +143,7 @@ export function migrateSidebarViewState(persistedState: unknown): SidebarViewPer
   }
 
   return {
-    groupMode:
-      state.groupMode === "responsibility" || state.groupMode === "status"
-        ? state.groupMode
-        : "project",
+    groupMode: state.groupMode === "status" ? "status" : "project",
     hostFilters: readHostFilters(state),
     projectFilters: state.projectFilters ?? [],
     labelFilter: state.labelFilter
@@ -175,6 +173,7 @@ export function createSidebarViewStorage(
       }
       if (name !== SIDEBAR_VIEW_STORAGE_KEY) return null;
       const previous =
+        (await backingStorage.getItem(RESPONSIBILITY_SIDEBAR_VIEW_STORAGE_KEY)) ??
         (await backingStorage.getItem(PREVIOUS_SIDEBAR_VIEW_STORAGE_KEY)) ??
         (await backingStorage.getItem(LEGACY_SIDEBAR_GROUP_MODE_STORAGE_KEY));
       let state: unknown;
@@ -184,7 +183,7 @@ export function createSidebarViewStorage(
         state = undefined;
       }
       const migrated = JSON.stringify({
-        state: { ...migrateSidebarViewState(state), groupMode: "responsibility" },
+        state: migrateSidebarViewState(state),
         version: SIDEBAR_VIEW_STORE_VERSION,
       });
       // Commit adoption immediately. Old tabs still write the old key, so they
@@ -200,7 +199,7 @@ export function createSidebarViewStorage(
 export const useSidebarViewStore = create<SidebarViewStoreState>()(
   persist(
     (set) => ({
-      groupMode: "responsibility",
+      groupMode: "project",
       hostFilters: [],
       projectFilters: [],
       labelFilter: emptyLabelFilter(),

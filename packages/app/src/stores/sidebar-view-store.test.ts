@@ -283,7 +283,7 @@ describe("sidebar view store", () => {
   });
 });
 
-it("preserves the responsibility grouping preference through hydration", () => {
+it("migrates responsibility grouping to projects while preserving filters", () => {
   expect(
     migrateSidebarViewState({
       groupMode: "responsibility",
@@ -291,25 +291,35 @@ it("preserves the responsibility grouping preference through hydration", () => {
       projectFilters: [],
       labelFilter: { labels: [] },
     }),
-  ).toMatchObject({ groupMode: "responsibility", hostFilters: ["cloud"] });
+  ).toMatchObject({ groupMode: "project", hostFilters: ["cloud"] });
 });
 
-it("adopts Responsibility once and ignores later writes from old tabs", async () => {
+it("adopts project grouping once and ignores later writes from responsibility tabs", async () => {
   const backing = createMemoryStorage({
-    "sidebar-view": JSON.stringify({
-      state: { groupMode: "project", hostFilters: ["cloud"] },
+    "sidebar-view-responsibility-v1": JSON.stringify({
+      state: {
+        groupMode: "responsibility",
+        hostFilters: ["cloud"],
+        projectFilters: ["repo"],
+        labelFilter: { labels: ["urgent"] },
+      },
       version: 6,
     }),
   });
   const storage = createSidebarViewStorage(backing);
   const adopted = JSON.parse((await storage.getItem(SIDEBAR_VIEW_STORAGE_KEY))!);
-  expect(adopted.state).toMatchObject({ groupMode: "responsibility", hostFilters: ["cloud"] });
+  expect(adopted.state).toMatchObject({
+    groupMode: "project",
+    hostFilters: ["cloud"],
+    projectFilters: ["repo"],
+    labelFilter: { labels: ["urgent"] },
+  });
   await backing.setItem(
-    "sidebar-view",
+    "sidebar-view-responsibility-v1",
     JSON.stringify({ state: { groupMode: "project" }, version: 6 }),
   );
   expect(JSON.parse((await storage.getItem(SIDEBAR_VIEW_STORAGE_KEY))!).state.groupMode).toBe(
-    "responsibility",
+    "project",
   );
   adopted.state.groupMode = "status";
   await storage.setItem(SIDEBAR_VIEW_STORAGE_KEY, JSON.stringify(adopted));
@@ -317,12 +327,12 @@ it("adopts Responsibility once and ignores later writes from old tabs", async ()
     "status",
   );
 });
-it("defaults a fresh or invalid legacy Hub to Responsibility", async () => {
+it("defaults a fresh or invalid legacy Hub to projects", async () => {
   const cases: Record<string, string | null>[] = [{}, { "sidebar-view": "not JSON" }];
   for (const entries of cases) {
     const value = await createSidebarViewStorage(createMemoryStorage(entries)).getItem(
       SIDEBAR_VIEW_STORAGE_KEY,
     );
-    expect(JSON.parse(value!).state.groupMode).toBe("responsibility");
+    expect(JSON.parse(value!).state.groupMode).toBe("project");
   }
 });

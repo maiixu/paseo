@@ -39,6 +39,13 @@ const test = base.extend<{ workspaces: FinishedWorkspaces }>({
   },
 });
 
+test.use({
+  e2eDaemonConfig: {
+    version: 1,
+    agents: { skills: { selection: { mode: "custom", skills: [] } } },
+  },
+});
+
 function workspaceRow(page: Page, workspaceId: string) {
   return page.getByTestId(`sidebar-workspace-row-${getServerId()}:${workspaceId}`);
 }
@@ -139,14 +146,16 @@ async function leaveMarkedWorkspaceAndReopenOnCompact(
   });
 }
 
-async function completeTurnAndLeaveOnCompact(page: Page, { subject, other }: FinishedWorkspaces) {
-  await test.step("ordinary completion still clears on departure", async () => {
-    await closeMobileAgentSidebar(page);
+async function completeBackgroundTurnAndReopenOnCompact(
+  page: Page,
+  { subject, other }: FinishedWorkspaces,
+) {
+  await test.step("background completion clears on reopening", async () => {
+    await openWorkspaceOnCompact(page, other.workspaceId);
     await subject.client.sendAgentMessage(subject.agentId, "Finish another turn.");
     await subject.client.waitForFinish(subject.agentId, 20_000);
-    await openMobileAgentSidebar(page);
     await expectStatus(page, subject.workspaceId, "attention");
-    await openWorkspaceOnCompact(page, other.workspaceId);
+    await openWorkspaceOnCompact(page, subject.workspaceId);
     await expectStatus(page, subject.workspaceId, "done");
   });
 }
@@ -178,8 +187,9 @@ async function addFinishedAgent(workspace: MockAgentWorkspace) {
 
 async function openCompactWorkspace(page: Page, workspace: MockAgentWorkspace) {
   await page.setViewportSize({ width: 390, height: 844 });
-  await openAgentRoute(page, workspace);
+  await gotoAppShell(page);
   await openMobileAgentSidebar(page);
+  await openWorkspaceOnCompact(page, workspace.workspaceId);
 }
 
 async function markUnreadThenResumeChat(page: Page, workspaceId: string) {
@@ -225,5 +235,49 @@ test("manual unread survives leaving the current workspace on compact layout", a
   await leaveMarkedWorkspaceAndReadOnCompact(page, workspaces);
   await leaveMarkedWorkspaceAndReopenOnCompact(page, workspaces);
   await markUnreadThenResumeChat(page, workspaces.subject.workspaceId);
-  await completeTurnAndLeaveOnCompact(page, workspaces);
+  await completeBackgroundTurnAndReopenOnCompact(page, workspaces);
+});
+
+test("migrates Responsibility to projects and keeps rows in place when unread changes", async ({
+  page,
+  workspaces,
+}, testInfo) => {
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "sidebar-view-responsibility-v1",
+      JSON.stringify({
+        state: {
+          groupMode: "responsibility",
+          hostFilters: [],
+          projectFilters: [],
+          labelFilter: { labels: [] },
+        },
+        version: 6,
+      }),
+    );
+  });
+  await gotoAppShell(page);
+  await expect(workspaceRow(page, workspaces.subject.workspaceId)).toBeVisible();
+  await expect(page.getByText(/^(Needs you|Bot managed) ·/)).toHaveCount(0);
+  const rows = page.locator('[data-testid^="sidebar-workspace-row-"]');
+  const before = await rows.evaluateAll((elements) =>
+    elements.map((element) => element.getAttribute("data-testid")),
+  );
+  await markAsUnread(page, workspaces.subject.workspaceId);
+  expect(
+    await rows.evaluateAll((elements) =>
+      elements.map((element) => element.getAttribute("data-testid")),
+    ),
+  ).toEqual(before);
+  await page.reload();
+  await expectStatus(page, workspaces.subject.workspaceId, "attention");
+  expect(
+    await rows.evaluateAll((elements) =>
+      elements.map((element) => element.getAttribute("data-testid")),
+    ),
+  ).toEqual(before);
+  await testInfo.attach("stable-project-sidebar", {
+    body: await page.screenshot(),
+    contentType: "image/png",
+  });
 });

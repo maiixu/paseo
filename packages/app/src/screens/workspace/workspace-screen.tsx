@@ -1,5 +1,4 @@
 import { WorkspaceBackgroundTaskPanel } from "@/background-tasks/components";
-import { ManagedThreadPanel } from "@/managed-threads/components";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import type { JsonValue } from "@getpaseo/protocol/agent-types";
 import { getOpenAgentTabLabel } from "@getpaseo/protocol/agent-labels";
@@ -4109,7 +4108,6 @@ function WorkspaceScreenContent({
           workspace={workspaceDescriptor}
           isRouteFocused={isRouteFocused}
         />
-        <ManagedThreadPanel serverId={normalizedServerId} workspaceId={normalizedWorkspaceId} />
         <WorkspaceBackgroundTaskPanel
           serverId={normalizedServerId}
           workspaceId={normalizedWorkspaceId}

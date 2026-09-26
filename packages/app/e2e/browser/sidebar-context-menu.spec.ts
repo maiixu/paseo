@@ -1,4 +1,4 @@
-import { test } from "../support/fixtures";
+import { test, expect } from "../support/fixtures";
 import { gotoAppShell } from "../support/helpers/app";
 import { seedWorkspace } from "../support/helpers/seed-client";
 import {
@@ -13,6 +13,13 @@ import {
   showWorkspaceHoverCard,
 } from "../support/helpers/sidebar";
 
+test.use({
+  e2eDaemonConfig: {
+    version: 1,
+    agents: { skills: { selection: { mode: "custom", skills: [] } } },
+  },
+});
+
 test.describe("Sidebar context menus", () => {
   test("right-clicking workspace and project rows opens their actions at the pointer", async ({
     page,
@@ -25,6 +32,9 @@ test.describe("Sidebar context menus", () => {
       await showWorkspaceHoverCard(page, workspace.workspaceId);
       await openWorkspaceContextMenu(page, workspace.workspaceId);
       await expectWorkspaceContextMenuActions(page, workspace.workspaceId);
+      await expect(
+        page.getByRole("menuitem", { name: /Move to .*managed|Move to My conversations/ }),
+      ).toHaveCount(0);
       await expectWorkspaceContextMenuOwnsAttention(page);
 
       await closeWorkspaceContextMenu(page, workspace.workspaceId);

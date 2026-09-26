@@ -1,7 +1,6 @@
 import { BackgroundTaskMeta } from "@/background-tasks/components";
 import { useSessionStore } from "@/stores/session-store";
 import { selectTopicLabels } from "./workspace-meta-row/meta-items";
-import { ManagedThreadMeta } from "@/managed-threads/components";
 import { memo, useMemo, useCallback, useState, type ReactNode } from "react";
 import { Text, View, type ViewStyle } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
@@ -178,7 +177,6 @@ export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowConte
             </Text>
             <View style={sidebarWorkspaceRowStyles.rowRight}>{children}</View>
           </View>
-          <ManagedThreadMeta workspaceKey={workspace.workspaceKey} />
           <BackgroundTaskMeta workspaceKey={workspace.workspaceKey} />
           <WorkspaceMetaRow
             currentBranch={workspace.currentBranch}

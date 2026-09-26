@@ -7,11 +7,7 @@ export interface SidebarWorkspaceGroup {
   key: string;
   label: string;
   rows: SidebarWorkspaceEntry[];
-  leading:
-    | { kind: "status"; bucket: StatusBucket }
-    | { kind: "managed" }
-    | { kind: "pinned" }
-    | { kind: "conversation" };
+  leading: { kind: "status"; bucket: StatusBucket };
 }
 
 export function statusWorkspaceGroups(groups: readonly StatusGroup[]): SidebarWorkspaceGroup[] {
