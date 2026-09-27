@@ -1,3 +1,4 @@
+import { AgentContextHud } from "@/components/agent-context-hud";
 import { WorkspaceBackgroundTaskPanel } from "@/background-tasks/components";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import type { JsonValue } from "@getpaseo/protocol/agent-types";
@@ -3762,6 +3763,13 @@ function WorkspaceScreenContent({
   const headerRight = useMemo(
     () => (
       <View style={styles.headerRight}>
+        {focusedPaneAgentId ? (
+          <AgentContextHud
+            key={`${normalizedServerId}:${focusedPaneAgentId}`}
+            serverId={normalizedServerId}
+            agentId={focusedPaneAgentId}
+          />
+        ) : null}
         <PluginHeaderButtons serverId={normalizedServerId} workspaceId={normalizedWorkspaceId} />
         {!isMobile && workspaceDescriptor && workspaceDescriptor.scripts.length > 0 ? (
           <WorkspaceScriptsButton
@@ -3810,6 +3818,7 @@ function WorkspaceScreenContent({
       </View>
     ),
     [
+      focusedPaneAgentId,
       isMobile,
       workspaceDescriptor,
       normalizedServerId,
