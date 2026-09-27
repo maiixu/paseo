@@ -9,11 +9,11 @@ for (const viewport of [
   { width: 1440, height: 900 },
   { width: 390, height: 844 },
 ]) {
-  test(`context HUD stays visible and shares meter details at ${viewport.width}px`, async ({
+  test(`cold workspace route hydrates and shares context details at ${viewport.width}px`, async ({
     page,
   }) => {
     test.setTimeout(180_000);
-    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.setViewportSize(viewport);
     const session = await seedMockAgentWorkspace({
       repoPrefix: "context-hud-",
       title: "Context HUD acceptance",
@@ -21,7 +21,6 @@ for (const viewport of [
     });
     try {
       await openAgentRoute(page, session);
-      await page.setViewportSize(viewport);
       const hud = page.getByTestId("agent-context-hud");
       const meter = hud.getByTestId("context-window-meter");
       await expect(meter).toBeVisible({ timeout: 30_000 });
