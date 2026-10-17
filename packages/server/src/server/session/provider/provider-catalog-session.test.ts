@@ -1,3 +1,4 @@
+import { ProviderUsageService } from "../../../services/quota-fetcher/service.js";
 import { describe, expect, it, vi } from "vitest";
 import pino from "pino";
 import {
@@ -14,17 +15,16 @@ import {
   type ProviderSnapshotTransition,
 } from "../../agent/provider-snapshot-manager.js";
 import type { ProviderSnapshotEntry } from "../../agent/agent-sdk-types.js";
-import { ProviderUsageService } from "../../../services/quota-fetcher/service.js";
 import { expandProviderSnapshot } from "@getpaseo/protocol/provider-snapshot-codec";
 
 type SnapshotChangeHandler = (transition: ProviderSnapshotTransition) => void;
 
 interface MakeOptions {
+  usage?: { [K in keyof ProviderUsageService]?: unknown };
   visibleProviders?: Set<string>;
   supportsCustomModeIcons?: boolean;
   supportsCompactProviderSnapshots?: boolean;
   snapshot?: Partial<ProviderSnapshotManager>;
-  usage?: { [K in keyof ProviderUsageService]?: unknown };
   host?: Partial<ProviderCatalogSessionHost>;
 }
 
@@ -413,10 +413,6 @@ it("announces shared content without retransmitting models or hashing discovery 
     new ProviderCatalogSession({
       providerSnapshotManager: manager,
       logger: pino({ level: "silent" }),
-      providerUsageService: new ProviderUsageService({
-        logger: pino({ level: "silent" }),
-        fetchers: [],
-      }),
       host: {
         emit(message) {
           emitted.push(message);

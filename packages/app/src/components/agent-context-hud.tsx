@@ -9,12 +9,10 @@ export function AgentContextHud({ serverId, agentId }: { serverId: string; agent
       <ContextWindowMeter
         agentId={agentId}
         serverId={serverId}
-        provider={agent?.provider}
         maxTokens={agent?.lastUsage?.contextWindowMaxTokens ?? null}
         usedTokens={agent?.lastUsage?.contextWindowUsedTokens ?? null}
         totalCostUsd={agent?.lastUsage?.totalCostUsd}
         showPercentage
-        pending
       />
     </View>
   );

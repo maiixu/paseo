@@ -1,3 +1,4 @@
+import { ProviderUsageService } from "../../../services/quota-fetcher/service.js";
 import type pino from "pino";
 import { createHash } from "node:crypto";
 import { getErrorMessage } from "@getpaseo/protocol/error-utils";
@@ -19,7 +20,6 @@ import {
   type ProviderSnapshotEntry,
 } from "../../agent/agent-sdk-types.js";
 import type { ProviderAvailability } from "../../agent/agent-manager.js";
-import type { ProviderUsageService } from "../../../services/quota-fetcher/service.js";
 import { expandTilde } from "../../../utils/path.js";
 
 // COMPAT(customModeIcons): the only mode icons known to clients before v0.1.84. Any
@@ -56,13 +56,13 @@ export interface ProviderCatalogSessionHost {
 export interface ProviderCatalogSessionOptions {
   host: ProviderCatalogSessionHost;
   providerSnapshotManager: ProviderSnapshotManager;
-  providerUsageService: ProviderUsageService;
+  providerUsageService?: ProviderUsageService;
   logger: pino.Logger;
 }
 
 /**
  * A client's provider catalog surface: model / mode / feature listing, the providers
- * snapshot push + pull, provider diagnostics, and usage. The snapshot PUSH (start) and
+ * snapshot push + pull, and provider diagnostics. The snapshot PUSH (start) and
  * every PULL handler gate visibility and downgrade mode icons through the SAME predicates,
  * so an older client sees one consistent provider set across both paths — the COMPAT
  * invariant the shell could only enforce by code proximity before this carve.
@@ -70,14 +70,15 @@ export interface ProviderCatalogSessionOptions {
 export class ProviderCatalogSession {
   private readonly host: ProviderCatalogSessionHost;
   private readonly providerSnapshotManager: ProviderSnapshotManager;
-  private readonly providerUsageService: ProviderUsageService;
   private readonly logger: pino.Logger;
+  private readonly providerUsageService: ProviderUsageService;
   private unsubscribeSnapshotEvents: (() => void) | null = null;
 
   constructor(options: ProviderCatalogSessionOptions) {
     this.host = options.host;
+    this.providerUsageService =
+      options.providerUsageService ?? new ProviderUsageService({ logger: options.logger });
     this.providerSnapshotManager = options.providerSnapshotManager;
-    this.providerUsageService = options.providerUsageService;
     this.logger = options.logger;
   }
 

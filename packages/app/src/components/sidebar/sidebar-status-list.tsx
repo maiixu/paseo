@@ -1,3 +1,4 @@
+import { isWeb as platformIsWeb } from "@/constants/platform";
 import {
   memo,
   useCallback,
@@ -435,6 +436,7 @@ function StatusGroupHeader({
   group: SidebarWorkspaceGroup;
   collapsed: boolean;
 }) {
+  const { t } = useTranslation();
   const [isHovered, setIsHovered] = useState(false);
   const toggleWorkspaceGroupCollapsed = useSidebarCollapsedSectionsStore(
     (state) => state.toggleWorkspaceGroupCollapsed,
@@ -457,8 +459,8 @@ function StatusGroupHeader({
   return (
     <View onPointerEnter={handleHoverIn} onPointerLeave={handleHoverOut}>
       <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`${group.label} group`}
+        accessibilityRole={platformIsWeb ? undefined : "button"}
+        accessibilityLabel={t("sidebar.statusGroupAccessibility", { label: group.label })}
         accessibilityState={accessibilityState}
         style={rowStyle}
         onPress={handlePress}

@@ -6,7 +6,7 @@ import { useSessionStore } from "@/stores/session-store";
 import { providerUsageCopy } from "./copy";
 import type { ProviderUsageListPayload, ProviderUsageView } from "./types";
 
-export const PROVIDER_USAGE_STALE_TIME_MS = 5 * 60 * 1000;
+export const PROVIDER_USAGE_STALE_TIME_MS = 60 * 1000;
 
 type ProviderUsageClient = Pick<DaemonClient, "listProviderUsage">;
 
@@ -60,8 +60,8 @@ export function useProviderUsage(
     enabled,
     staleTime: PROVIDER_USAGE_STALE_TIME_MS,
     refetchOnMount: true,
-    refetchOnReconnect: false,
-    refetchOnWindowFocus: false,
+    refetchOnReconnect: true,
+    refetchOnWindowFocus: true,
     refetchInterval: enabled && options.agentId ? 30_000 : false,
   });
 

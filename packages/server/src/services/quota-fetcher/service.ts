@@ -47,13 +47,19 @@ export class ProviderUsageService {
     this.now = options.now ?? Date.now;
   }
 
+  async listRoutedUsage(agentId?: string, forceRefresh = false) {
+    return this.accountRouter?.read(agentId, forceRefresh) ?? null;
+  }
+
   async listUsage(options?: {
     forceRefresh?: boolean;
     agentId?: string;
   }): Promise<ProviderUsageListResult> {
     const [usage, routed] = await Promise.all([
       this.listProviderUsage(options),
-      this.accountRouter?.read(options?.agentId).catch(() => ({ accounts: [] })) ?? null,
+      this.accountRouter
+        ?.read(options?.agentId, options?.forceRefresh)
+        .catch(() => ({ accounts: [] })) ?? null,
     ]);
     if (!routed) return usage;
     return {

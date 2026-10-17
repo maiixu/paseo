@@ -2,13 +2,12 @@ import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Keyboard, ScrollView, Text, View, type PressableStateCallbackType } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
-import { Bot } from "lucide-react-native";
 import type { AgentProvider } from "@getpaseo/protocol/agent-types";
 import type { AgentProfilePicker, AgentProfileSeed } from "@/agent-profiles";
 import { AdaptiveModalSheet } from "@/components/adaptive-modal-sheet";
 import { ComboboxTrigger } from "@/components/ui/combobox-trigger";
-import { getProviderIcon } from "@/components/provider-icons";
-import { ModelBrowser, ModelProviderGlyph, useModelBrowser } from "@/components/model-browser";
+import { useProviderIcon } from "@/components/provider-icons";
+import { ModelBrowser, useModelBrowser } from "@/components/model-browser";
 import { resolveModelBrowserScrolling } from "@/components/model-browser-view";
 import { AgentControlTrigger } from "@/composer/agent-controls/control";
 import { ComposerToolbarGlyph } from "@/composer/agent-controls/glyph";
@@ -130,9 +129,8 @@ export function CompactModelSheet({
     profiles,
     serverId,
   });
-  const ProviderIcon =
-    selectedProvider.trim().length > 0 ? getProviderIcon(selectedProvider, serverId) : null;
-  const ModelIcon = ProviderIcon ?? Bot;
+  const ModelIcon = useProviderIcon(selectedProvider, serverId);
+  const hasSelectedProvider = selectedProvider.trim().length > 0;
   const rootHeader = useMemo(
     () => ({
       ...rootBrowser.header,
@@ -277,9 +275,9 @@ export function CompactModelSheet({
         testID="combined-model-selector"
         chevron={null}
       >
-        {ProviderIcon ? (
+        {hasSelectedProvider ? (
           <ComposerToolbarGlyph size={glyphSize}>
-            <ModelProviderGlyph provider={selectedProvider} serverId={serverId} size={glyphSize} />
+            <ModelIcon size={glyphSize} color={styles.providerIcon.color} />
           </ComposerToolbarGlyph>
         ) : null}
         <View style={styles.triggerLabels}>
@@ -377,6 +375,7 @@ export function CompactModelSheet({
 }
 
 const styles = StyleSheet.create((theme) => ({
+  providerIcon: { color: theme.colors.foregroundMuted },
   trigger: {
     height: 28,
     minWidth: 0,

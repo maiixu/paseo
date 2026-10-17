@@ -36,7 +36,10 @@ export class AccountRouterUsage {
     },
   ) {}
 
-  async read(agentId?: string): Promise<{ accounts: Accounts; routing?: Routing } | null> {
+  async read(
+    agentId?: string,
+    forceRefresh = false,
+  ): Promise<{ accounts: Accounts; routing?: Routing } | null> {
     const parsedCommand = z.array(z.string()).safeParse(this.options.getCommand());
     const command = parsedCommand.success ? parsedCommand.data : undefined;
     if (!command?.some((part) => basename(part) === "paseo-codex-router.py")) return null;
@@ -46,7 +49,7 @@ export class AccountRouterUsage {
       throw new Error("Account router configuration is unavailable");
     const config = ConfigSchema.parse(JSON.parse(await fs.readFile(path, "utf8")));
     const now = (this.options.now ?? Date.now)();
-    const accounts = await this.loadAccounts(config, now);
+    const accounts = await this.loadAccounts(config, now, forceRefresh);
     if (!agentId) return { accounts };
     const agent = this.options.getAgent(agentId);
     if (!agent || agent.provider !== "codex") return { accounts };
@@ -85,10 +88,15 @@ export class AccountRouterUsage {
     }
     return { accounts, routing };
   }
-  private async loadAccounts(config: z.infer<typeof ConfigSchema>, now: number): Promise<Accounts> {
+  private async loadAccounts(
+    config: z.infer<typeof ConfigSchema>,
+    now: number,
+    forceRefresh = false,
+  ): Promise<Accounts> {
     const key = JSON.stringify(config);
     let accounts: Accounts;
-    if (this.cache?.key === key && now - this.cache.at < 60_000) accounts = this.cache.accounts;
+    if (!forceRefresh && this.cache?.key === key && now - this.cache.at < 60_000)
+      accounts = this.cache.accounts;
     else {
       if (!this.inFlight || this.inFlight.key !== key) {
         const promise = Promise.all(

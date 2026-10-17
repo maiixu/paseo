@@ -74,7 +74,7 @@ it("reads each account only from its explicit home and labels actual quota windo
   vi.stubEnv("CODEX_HOME", join(root, "pro"));
   await ledger("plus");
   const result = await usage.read("agent");
-  expect(calls).toEqual(["Bearer plus", "Bearer pro"]);
+  expect([...calls].sort()).toEqual(["Bearer plus", "Bearer pro"]);
   expect(
     result?.accounts.map((a) => [a.accountId, a.windows[0].label, a.windows[0].remainingPct]),
   ).toEqual([
@@ -138,4 +138,13 @@ it("rejects invalid thread paths and never reports an unknown ledger account", a
   agent = { provider: "codex", persistence: { sessionId: thread } };
   await ledger("other");
   expect((await usage.read("agent"))?.routing?.status).toBe("unknown");
+});
+
+it("explicit refresh bypasses account quota cache", async () => {
+  await ledger("plus");
+  await usage.read("agent");
+  now += 1000;
+  const refreshed = await usage.read("agent", true);
+  expect(calls).toHaveLength(4);
+  expect(refreshed?.accounts[0].fetchedAt).toBe(new Date(now).toISOString());
 });
