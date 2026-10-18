@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AgentProfile } from "@getpaseo/protocol/messages";
 import type { ProviderSnapshotEntry } from "@getpaseo/protocol/agent-types";
-import { resolvePinnedLaunchProfile } from "./launch-defaults";
+import { resolveHostLaunchProfileId, resolvePinnedLaunchProfile } from "./launch-defaults";
 import {
   resolveAgentForm,
   INITIAL_USER_MODIFIED,
@@ -163,5 +163,18 @@ describe("pinned launch profile", () => {
     expect(result.status).toBe("unavailable");
     if (result.status !== "unavailable") throw new Error("Expected unavailable profile");
     expect(result.message).toContain("Choose another profile or model.");
+  });
+});
+
+describe("host-specific launch profiles", () => {
+  const profiles = { mactop: "astra-medium", cloudtop: "sol-high" };
+  it("changes the default model with the selected host", () => {
+    expect(resolveHostLaunchProfileId("cloudtop", "sol-high", profiles)).toBe("sol-high");
+    expect(resolveHostLaunchProfileId("mactop", "sol-high", profiles)).toBe("astra-medium");
+    expect(resolveHostLaunchProfileId("cloudtop", "sol-high", profiles)).toBe("sol-high");
+  });
+  it("preserves the configured fallback for other hosts and unconfigured builds", () => {
+    expect(resolveHostLaunchProfileId("other", "sol-high", profiles)).toBe("sol-high");
+    expect(resolveHostLaunchProfileId(null, null, {})).toBeNull();
   });
 });

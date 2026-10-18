@@ -16,6 +16,7 @@ import { OptimisticFormPreferences } from "@/create-agent-preferences/optimistic
 import { applyAgentProfilePreferences } from "@/create-agent-preferences/preferences";
 import {
   DEFAULT_LAUNCH_PROFILE_ID,
+  resolveHostLaunchProfileId,
   resolvePinnedLaunchProfile,
   shouldUsePinnedLaunchProfile,
 } from "@/create-agent-preferences/launch-defaults";
@@ -160,7 +161,9 @@ function usePinnedAgentFormDefaults(input: {
   snapshotEntries: ProviderSnapshotEntry[] | undefined;
 }) {
   const { initialValues, snapshotEntries } = input;
-  const profileId = input.isCreateFlow ? DEFAULT_LAUNCH_PROFILE_ID : null;
+  const profileId = input.isCreateFlow
+    ? resolveHostLaunchProfileId(input.snapshotServerId, DEFAULT_LAUNCH_PROFILE_ID)
+    : null;
   const hasUserSelection = input.userModified.provider || input.userModified.model;
   const needsPinnedProfile = shouldUsePinnedLaunchProfile({
     profileId,

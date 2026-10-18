@@ -9,6 +9,19 @@ export const DEFAULT_LAUNCH_SERVER_ID =
 export const DEFAULT_LAUNCH_PROFILE_ID =
   process.env.EXPO_PUBLIC_PASEO_DEFAULT_PROFILE_ID?.trim() || null;
 
+// A model default belongs to the selected host, independently of the Hub host.
+const HOST_LAUNCH_PROFILE_IDS: Record<string, string> = JSON.parse(
+  process.env.EXPO_PUBLIC_PASEO_HOST_PROFILE_IDS || "{}",
+);
+
+export function resolveHostLaunchProfileId(
+  serverId: string | null,
+  fallback: string | null = DEFAULT_LAUNCH_PROFILE_ID,
+  profiles: Readonly<Record<string, string>> = HOST_LAUNCH_PROFILE_IDS,
+): string | null {
+  return (serverId ? profiles[serverId] : undefined) ?? fallback;
+}
+
 export type PinnedLaunchProfile =
   | { status: "disabled" }
   | { status: "loading" }

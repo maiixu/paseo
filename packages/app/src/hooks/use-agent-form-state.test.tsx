@@ -23,9 +23,18 @@ const fixture = vi.hoisted(() => ({
 vi.mock("@/create-agent-preferences/launch-defaults", async (original) => ({
   ...(await original<typeof import("@/create-agent-preferences/launch-defaults")>()),
   DEFAULT_LAUNCH_PROFILE_ID: "astra-medium",
+  resolveHostLaunchProfileId: (serverId: string | null) =>
+    serverId === "mactop" ? "astra-high" : "astra-medium",
 }));
 vi.mock("./use-daemon-config", () => ({
-  useDaemonConfig: () => ({ config: { agentProfiles: [fixture.profile] } }),
+  useDaemonConfig: () => ({
+    config: {
+      agentProfiles: [
+        fixture.profile,
+        { ...fixture.profile, id: "astra-high", thinkingOptionId: "high" },
+      ],
+    },
+  }),
 }));
 vi.mock("./use-providers-snapshot", () => ({
   useProvidersSnapshot: () => ({
@@ -157,4 +166,16 @@ it("respects an explicit restored draft instead of applying the launch profile",
   );
   expect(result.current.selectedProvider).toBe("claude");
   expect(result.current.selectedModel).toBe("opus");
+});
+
+it("recomputes the pinned effort when the selected host changes", () => {
+  const { result, rerender } = renderHook(
+    ({ serverId }) => useAgentFormState({ serverId, workingDir: "/project" }),
+    { initialProps: { serverId: "cloudtop" } },
+  );
+  expect(result.current.selectedThinkingOptionId).toBe("medium");
+  rerender({ serverId: "mactop" });
+  expect(result.current.selectedThinkingOptionId).toBe("high");
+  rerender({ serverId: "cloudtop" });
+  expect(result.current.selectedThinkingOptionId).toBe("medium");
 });
