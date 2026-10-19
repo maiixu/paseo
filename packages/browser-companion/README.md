@@ -36,12 +36,12 @@ Use Node 22 for this checkout. Build in the worktree, then copy the accepted art
 
 ### New-agent defaults
 
-The personal Web build pins global new-agent creation to cloudtop and the `codex-sol6-high` profile. Set these public build variables in the shell before building:
+The personal Web build pins global new-agent creation to cloudtop and the `codex-astra-medium` profile. Set these public build variables in the shell before building:
 
 ```bash
 export EXPO_PUBLIC_PASEO_DEFAULT_SERVER_ID="$(ssh cloudtop 'cat ~/.paseo/server-id')"
-export EXPO_PUBLIC_PASEO_DEFAULT_PROFILE_ID=codex-sol6-high
-export EXPO_PUBLIC_PASEO_HOST_PROFILE_IDS='{"srv_u8gICkIrpwaZ":"codex-astra-medium","srv_SEG9hCDOBv2a":"codex-sol6-high"}'
+export EXPO_PUBLIC_PASEO_DEFAULT_PROFILE_ID=codex-astra-medium
+export EXPO_PUBLIC_PASEO_HOST_PROFILE_IDS='{"srv_u8gICkIrpwaZ":"codex-astra-medium","srv_SEG9hCDOBv2a":"codex-astra-medium"}'
 ```
 
 Keep these variables in later builds and clear Metro caches when exporting; changing an environment value alone can reuse a bundle with the previous default. The host ID identifies the saved connection; it is not a credential. Profile values come from that host's existing daemon configuration. Both hosts must carry the named profile. Profile ordering is separate from default selection and lives in each host's `daemon.agentProfiles`.
