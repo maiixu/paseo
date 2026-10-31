@@ -197,3 +197,11 @@ Browser automation is opt-in and adds tools for opening tabs, reading pages, cli
 | Tool    | Function                                                                                  |
 | ------- | ----------------------------------------------------------------------------------------- |
 | `speak` | Speak text through daemon-managed voice output. Available only in voice-enabled sessions. |
+
+## Usage observations
+
+`get_usage` accepts an optional `agentId`, defaulting to the calling conversation.
+It returns account-specific allowance windows, observation age and route state.
+Unknown and exhausted remain distinct. It never dispatches work or enables paid
+usage. `create_agent` accepts the label `paseo.resource-reason` to explain a
+resource choice in the private dispatch receipt.

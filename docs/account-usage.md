@@ -26,6 +26,21 @@ The request and response fields are optional: older clients retain their ordinar
 provider card, and hosts without a router keep their existing single-account view.
 An account's percentage is never added to another account's percentage.
 
-This feature changes observability only. Router selection, allowance waiting,
-subscription spending policy, Fast settings, agent scheduling and thread custody
-remain owned by their existing components.
+Use `paseo usage --agent <full-id> --json` or the agent's `get_usage` tool for a
+planning snapshot. `available` provider status is not task admission. Empty,
+stale and invalid account observations remain unknown; an exhausted window
+cannot be offset by another window or account. The output never pools allowance.
+Configured switching mode and the worker's observed mode are separate: missing
+worker observation does not prove that an old process adopted a live pause.
+
+New agent creation records the selected provider/model and pre-inference usage
+snapshot in `resource-decisions/decisions.jsonl` under the owning daemon home.
+Supply `paseo.resource-reason` as an agent label to retain the reason; otherwise
+it records explicit requested configuration, not an inferred optimization.
+State transitions append outcomes to the same private log. Prompts, credentials,
+working directories and raw errors are excluded. Failed quota observation does
+not block authorized work; it is recorded as unavailable. This evidence does not
+authorize another provider, paid overage or history migration.
+
+Account admission, safe switching and custody remain owned by the router. The
+usage command and tool only observe them.

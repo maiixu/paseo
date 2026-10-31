@@ -6319,3 +6319,50 @@ describe("agent snapshot MCP serialization", () => {
     expect(content).not.toContain("first answer");
   });
 });
+
+describe("resource usage MCP tool", () => {
+  it("defaults to caller and exposes account observations without dispatching", async () => {
+    const { agentManager, agentStorage } = createTestDeps();
+    const requested: (string | undefined)[] = [];
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      callerAgentId: "owner-agent",
+      providerSnapshotManager: createOpenCodeManager().manager,
+      logger: createTestLogger(),
+      getResourceUsage: async (agentId) => {
+        requested.push(agentId);
+        return {
+          fetchedAt: new Date().toISOString(),
+          providers: [
+            {
+              providerId: "codex",
+              displayName: "Codex",
+              status: "available",
+              planLabel: null,
+              windows: [{ id: "weekly", label: "Weekly", remainingPct: 50 }],
+            },
+          ],
+        };
+      },
+    });
+    const response = await registeredTool(server, "get_usage").handler({});
+    expect(requested).toEqual(["owner-agent"]);
+    expect(response.structuredContent).toMatchObject({
+      resources: [{ allowance: "remaining", executionAdmission: "not_assessed" }],
+    });
+  });
+
+  it("reports missing observation capability instead of invented quota", async () => {
+    const { agentManager, agentStorage } = createTestDeps();
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: createOpenCodeManager().manager,
+      logger: createTestLogger(),
+    });
+    await expect(registeredTool(server, "get_usage").handler({})).rejects.toThrow(
+      "Resource usage is unavailable",
+    );
+  });
+});

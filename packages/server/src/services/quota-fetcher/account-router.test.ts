@@ -87,6 +87,9 @@ it("reads each account only from its explicit home and labels actual quota windo
     status: "active",
     phase: "idle",
     checkedAt: new Date(now).toISOString(),
+    configuredSwitchingMode: "automatic",
+    observedSwitchingMode: null,
+    policyObservedAt: null,
   });
   expect(JSON.stringify(result)).not.toContain("Bearer");
   expect(JSON.stringify(result)).not.toContain(root);
@@ -147,4 +150,23 @@ it("explicit refresh bypasses account quota cache", async () => {
   const refreshed = await usage.read("agent", true);
   expect(calls).toHaveLength(4);
   expect(refreshed?.accounts[0].fetchedAt).toBe(new Date(now).toISOString());
+});
+it("reads live switching policy independently of cached quota and flags old workers", async () => {
+  await ledger("plus");
+  await writeFile(join(root, "switching-policy.json"), JSON.stringify({ mode: "fixed" }));
+  const fixed = await usage.read("agent-1");
+  expect(fixed?.routing?.configuredSwitchingMode).toBe("fixed");
+  expect(fixed?.routing?.observedSwitchingMode).toBeNull();
+  await writeFile(join(root, "switching-policy.json"), JSON.stringify({ mode: "automatic" }));
+  await writeFile(
+    join(root, "threads", `${thread}.json`),
+    JSON.stringify({
+      owner: "plus",
+      phase: "running",
+      switchingPolicy: { mode: "fixed", checkedAt: now / 1000 },
+    }),
+  );
+  const changed = await usage.read("agent-1");
+  expect(changed?.routing?.configuredSwitchingMode).toBe("automatic");
+  expect(changed?.routing?.observedSwitchingMode).toBe("fixed");
 });

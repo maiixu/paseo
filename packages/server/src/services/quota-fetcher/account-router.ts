@@ -13,9 +13,29 @@ type Accounts = NonNullable<Payload["providers"][number]["accounts"]>;
 const ConfigSchema = z.object({
   stateDirectory: z.string(),
   legacyAccount: z.string(),
+  automaticSwitching: z.boolean().optional(),
+  models: z.array(z.string()).optional(),
   accounts: z.array(z.object({ alias: z.string().min(1), home: z.string().min(1) })).min(1),
 });
-const LedgerSchema = z.object({ owner: z.string(), phase: z.string() });
+const LedgerSchema = z.object({
+  owner: z.string(),
+  phase: z.string(),
+  switchingPolicy: z.object({ mode: z.string(), checkedAt: z.number() }).optional(),
+});
+async function configuredSwitchingMode(config: z.infer<typeof ConfigSchema>): Promise<string> {
+  try {
+    const data = JSON.parse(
+      await fs.readFile(join(expand(config.stateDirectory), "switching-policy.json"), "utf8"),
+    );
+    return data.mode === "automatic" ? "automatic" : "fixed";
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return "fixed";
+    const paused =
+      config.automaticSwitching === false ||
+      config.models?.includes("__automatic_account_switching_paused__");
+    return paused ? "fixed" : "automatic";
+  }
+}
 function expand(path: string): string {
   return path.startsWith("~/") ? join(homedir(), path.slice(2)) : path;
 }
@@ -59,6 +79,9 @@ export class AccountRouterUsage {
       status: "unknown",
       phase: null,
       checkedAt: new Date(now).toISOString(),
+      configuredSwitchingMode: await configuredSwitchingMode(config),
+      observedSwitchingMode: null,
+      policyObservedAt: null,
     };
     const thread = agent.persistence?.sessionId;
     if (!thread) return { accounts, routing: { ...routing, status: "pending" } };
@@ -76,6 +99,12 @@ export class AccountRouterUsage {
         routing.accountId = ledger.owner;
         routing.phase = ledger.phase;
         routing.status = "active";
+        if (ledger.switchingPolicy) {
+          routing.observedSwitchingMode = ledger.switchingPolicy.mode;
+          routing.policyObservedAt = new Date(
+            ledger.switchingPolicy.checkedAt * 1000,
+          ).toISOString();
+        }
       }
     } catch (error) {
       if (

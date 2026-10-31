@@ -771,6 +771,10 @@ export class VoiceAssistantWebSocketServer {
     this.logger.info("WebSocket server initialized on /ws");
   }
 
+  async getResourceUsage(agentId?: string) {
+    return this.providerUsageService.listUsage({ agentId });
+  }
+
   private assignOptionalServices(params: {
     speech: SpeechService | null | undefined;
     terminalManager: TerminalManager | null | undefined;

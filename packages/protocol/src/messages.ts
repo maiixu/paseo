@@ -6263,6 +6263,9 @@ export const ProviderUsageSchema = ProviderUsageBaseSchema.extend({
 });
 
 export const ProviderAccountRoutingSchema = z.object({
+  configuredSwitchingMode: z.string().optional(),
+  observedSwitchingMode: z.string().nullable().optional(),
+  policyObservedAt: z.string().nullable().optional(),
   providerId: z.string(),
   accountId: z.string().nullable(),
   status: z.enum(["active", "legacy", "pending", "unknown"]),

@@ -36,6 +36,7 @@ export interface CreateAgentSessionWorktreeResult {
 }
 
 export interface CreateAgentCommandDependencies {
+  recordResourceDecision?: (agent: ManagedAgent) => Promise<void>;
   agentManager: AgentManager;
   agentStorage: AgentStorage;
   logger: Logger;
@@ -186,6 +187,16 @@ export async function createAgentCommand(
     input.kind === "session" ? input.agentId : undefined,
     resolved.createOptions,
   );
+
+  // Record the selected configuration before inference; failure never replays creation.
+  try {
+    await dependencies.recordResourceDecision?.(snapshot);
+  } catch {
+    dependencies.logger.warn(
+      { agentId: snapshot.id },
+      "Resource decision receipt could not be saved",
+    );
+  }
 
   resolved.setupContinuation?.startAfterAgentCreate({
     agentId: snapshot.id,

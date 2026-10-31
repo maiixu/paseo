@@ -1,3 +1,5 @@
+import { summarizeUsage } from "@getpaseo/protocol/usage-summary";
+import type { ProviderUsageListResult } from "../../../services/quota-fetcher/service.js";
 import { stat } from "node:fs/promises";
 import { z } from "zod";
 import { ensureValidJson } from "../../json-utils.js";
@@ -32,7 +34,11 @@ import {
   requireActiveWorkspaceForArchive,
   type ArchiveDependencies,
 } from "../../workspace-archive-service.js";
-import { createAgentCommand, type CreateAgentFromMcpInput } from "../create-agent/create.js";
+import {
+  createAgentCommand,
+  type CreateAgentFromMcpInput,
+  type CreateAgentCommandDependencies,
+} from "../create-agent/create.js";
 import type { VoiceCallerContext, VoiceSpeakHandler } from "../../voice-types.js";
 import type { FirstAgentContext } from "../../messages.js";
 import { everyMsToFiveFieldCron } from "@getpaseo/protocol/schedule/cadence";
@@ -101,6 +107,8 @@ import type { ProviderPaseoToolsPolicy } from "@getpaseo/protocol/provider-confi
 import { isPaseoToolEnabled } from "../paseo-tool-policy.js";
 
 export interface PaseoToolHostDependencies {
+  recordResourceDecision?: CreateAgentCommandDependencies["recordResourceDecision"];
+  getResourceUsage?: (agentId?: string) => Promise<ProviderUsageListResult>;
   agentManager: AgentManager;
   agentStorage: AgentStorage;
   terminalManager?: TerminalManager | null;
@@ -1470,6 +1478,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
           agentManager,
           agentStorage,
           logger: childLogger,
+          recordResourceDecision: options.recordResourceDecision,
           paseoHome: options.paseoHome,
           worktreesRoot: options.worktreesRoot,
           terminalManager,
@@ -2994,6 +3003,21 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
           models,
         }),
       };
+    },
+  );
+
+  registerTool(
+    "get_usage",
+    {
+      title: "Read resource usage",
+      description:
+        "Read per-account quota windows, reset times, observation freshness and current route. Defaults to this conversation. Read-only: does not run inference, choose a model, change accounts or authorize spending. Unknown and exhausted are distinct.",
+      inputSchema: { agentId: z.string().optional() },
+    },
+    async ({ agentId }) => {
+      if (!options.getResourceUsage) throw new Error("Resource usage is unavailable on this host");
+      const result = await options.getResourceUsage(agentId ?? callerAgentId);
+      return { content: [], structuredContent: ensureValidJson(summarizeUsage(result)) };
     },
   );
 

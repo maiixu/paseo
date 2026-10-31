@@ -431,3 +431,10 @@ paseo ls -q                    # IDs only (quiet)
 - `--json`, JSON output
 - `-q, --quiet`, minimal output
 - `--no-color`, disable colors
+
+## Account usage
+
+`paseo usage --agent <full-agent-id> --json` reads allowance windows, reset times,
+observation freshness and current routing from the selected host. Omit `--agent`
+for the host's provider observations. This command does not run inference or
+change accounts. Positive allowance is not task authorization.

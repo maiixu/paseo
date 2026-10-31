@@ -1,3 +1,4 @@
+import { ResourceDecisions } from "./agent/resource-decisions.js";
 import type { PluginRegistries } from "@getpaseo/protocol/plugin-registry";
 import { describeHookWorkspace } from "./plugins/lifecycle/index.js";
 import express from "express";
@@ -1182,7 +1183,32 @@ export async function createPaseoDaemon(
     );
   };
 
+  const resourceDecisions = new ResourceDecisions(config.paseoHome);
+  agentManager.subscribe(
+    (event) => {
+      if (event.type !== "agent_state") return;
+      try {
+        resourceDecisions.observe(event.agent);
+      } catch {
+        logger.warn("Resource outcome receipt could not be saved");
+      }
+    },
+    { replayState: false },
+  );
+  const recordResourceDecision: CreateAgentCommandDependencies["recordResourceDecision"] = async (
+    agent,
+  ) => {
+    let usage = null;
+    try {
+      usage = (await wsServer?.getResourceUsage(agent.id)) ?? null;
+    } catch {
+      /* Discovery is evidence, never a prerequisite for the authorized task. */
+    }
+    resourceDecisions.record(agent, usage);
+  };
+
   const createAgentCommandDependencies: CreateAgentCommandDependencies = {
+    recordResourceDecision,
     agentManager,
     agentStorage,
     logger,
@@ -1384,6 +1410,11 @@ export async function createPaseoDaemon(
   const createAgentToolHostDependencies = (
     runtime: PaseoToolRuntimeContext,
   ): PaseoToolHostDependencies => ({
+    recordResourceDecision,
+    getResourceUsage: async (agentId) => {
+      if (!wsServer) throw new Error("Daemon is not ready");
+      return wsServer.getResourceUsage(agentId);
+    },
     agentManager,
     agentStorage,
     terminalManager,

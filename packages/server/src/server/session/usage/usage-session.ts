@@ -103,12 +103,27 @@ export class UsageSession {
     try {
       if (!this.options.runtime) throw new Error("Plugin runtime is unavailable");
       const usage = await this.options.runtime.listLegacyUsage();
+      const routed = await this.options.routedUsage?.listRoutedUsage(msg.agentId);
+      if (routed) {
+        const codex = usage.providers.find((p) => p.providerId === "codex");
+        if (codex) codex.accounts = routed.accounts;
+        else
+          usage.providers.push({
+            providerId: "codex",
+            displayName: "Codex accounts",
+            status: "available",
+            planLabel: null,
+            windows: [],
+            accounts: routed.accounts,
+          });
+      }
       this.options.emit({
         type: "provider.usage.list.response",
         payload: {
           requestId: msg.requestId,
           fetchedAt: usage.fetchedAt,
           providers: usage.providers,
+          ...(routed?.routing ? { accountRouting: routed.routing } : {}),
         },
       });
     } catch (error) {

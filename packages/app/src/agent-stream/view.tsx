@@ -1,3 +1,4 @@
+import { latestSubstantiveActivity, errorRecoveryState } from "./error-recovery";
 import { ChatFind, ChatFindExpansion } from "@/agent-stream/chat-find";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import React, {
@@ -534,6 +535,10 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     const effectiveStreamItems = useRetainedValue(streamItems, isActive);
     const effectiveStreamHead = useRetainedValue(streamHead, isActive);
     const effectiveTurnPresentation = useRetainedValue(turnPresentation, isActive);
+    const lastOutputAt = useMemo(
+      () => latestSubstantiveActivity([...effectiveStreamItems, ...(effectiveStreamHead ?? [])]),
+      [effectiveStreamItems, effectiveStreamHead],
+    );
     const isTurnActive = effectiveTurnPresentation.isActive;
     const presentStream = useMemo(() => createStreamPresentation(), []);
     const presentation = useMemo(
@@ -715,6 +720,18 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
 
     const renderAssistantMessageItem = useCallback(
       (layoutItem: StreamLayoutItem, item: Extract<StreamItem, { kind: "assistant_message" }>) => {
+        const recoveryState = errorRecoveryState(
+          item.timestamp.getTime(),
+          lastOutputAt,
+          context.status,
+        );
+        const recoveryMessages = {
+          historical:
+            "Historical error — newer assistant or completed tool output is present. Task completion is not implied.",
+          blocked: "Currently blocked — no later execution output confirmed.",
+          unconfirmed: "Recovery not yet confirmed by new execution output.",
+        };
+        const recoveryLevel = recoveryState === "blocked" ? "error" : "info";
         return (
           <AssistantFileLinkResolverProvider
             client={client}
@@ -725,23 +742,43 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           >
             <ChatFindExpansion messageId={getStreamItemMessageId(item)}>
               {(renderFullContent) => (
-                <AssistantMessage
-                  renderFullContent={renderFullContent}
-                  occurrenceKey={createAssistantImageOccurrenceKey({ agentId, itemId: item.id })}
-                  message={item.text}
-                  timestamp={item.timestamp.getTime()}
-                  workspaceRoot={workspaceRoot}
-                  serverId={resolvedServerId}
-                  client={client}
-                  spacing={layoutItem.assistantSpacing}
-                  phase={layoutItem.phase}
-                />
+                <>
+                  {item.text.startsWith("[System Error]") ? (
+                    <Notification
+                      level={recoveryLevel}
+                      message={t(`message.errorRecovery.${recoveryState}`, {
+                        defaultValue: recoveryMessages[recoveryState],
+                      })}
+                    />
+                  ) : null}
+                  <AssistantMessage
+                    renderFullContent={renderFullContent}
+                    occurrenceKey={createAssistantImageOccurrenceKey({ agentId, itemId: item.id })}
+                    message={item.text}
+                    timestamp={item.timestamp.getTime()}
+                    workspaceRoot={workspaceRoot}
+                    serverId={resolvedServerId}
+                    client={client}
+                    spacing={layoutItem.assistantSpacing}
+                    phase={layoutItem.phase}
+                  />
+                </>
               )}
             </ChatFindExpansion>
           </AssistantFileLinkResolverProvider>
         );
       },
-      [agentId, client, handleInlinePathPress, resolvedServerId, toast, workspaceRoot],
+      [
+        agentId,
+        client,
+        handleInlinePathPress,
+        resolvedServerId,
+        toast,
+        workspaceRoot,
+        lastOutputAt,
+        context.status,
+        t,
+      ],
     );
 
     const renderThoughtItem = useCallback(

@@ -3,6 +3,7 @@ import { Command, Option } from "commander";
 import { createAgentCommand } from "./commands/agent/index.js";
 import { createDaemonCommand } from "./commands/daemon/index.js";
 import { createPermitCommand } from "./commands/permit/index.js";
+import { runUsageCommand } from "./commands/usage.js";
 import { createProviderCommand } from "./commands/provider/index.js";
 import { createPluginCommand } from "./commands/plugin/index.js";
 import { createProjectCommand } from "./commands/project/index.js";
@@ -148,6 +149,14 @@ export function createCli(): Command {
 
   // Provider commands
   program.addCommand(createProviderCommand());
+  addJsonAndDaemonHostOptions(
+    program
+      .command("usage")
+      .description(
+        "Read account allowance, freshness and current routing; no inference or dispatch",
+      )
+      .option("--agent <id>", "Full agent ID for current account ownership"),
+  ).action(withOutput(runUsageCommand));
   program.addCommand(createPluginCommand());
 
   // Speech model commands
