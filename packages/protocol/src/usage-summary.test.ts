@@ -75,3 +75,11 @@ it("strips raw error and detail strings from planning output", () => {
   expect(JSON.stringify(r)).not.toContain("secret");
   expect(r.resources[0]?.allowance).toBe("unknown");
 });
+
+it("does not fall back to aggregate quota when routed account discovery fails", () => {
+  const r = summarizeUsage(
+    { fetchedAt: new Date(now).toISOString(), providers: [{ ...source, accounts: [] }] },
+    now,
+  );
+  expect(r.resources[0]?.allowance).toBe("unknown");
+});

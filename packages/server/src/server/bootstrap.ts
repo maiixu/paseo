@@ -1183,12 +1183,17 @@ export async function createPaseoDaemon(
     );
   };
 
-  const resourceDecisions = new ResourceDecisions(config.paseoHome);
+  let resourceDecisions: ResourceDecisions | null = null;
+  try {
+    resourceDecisions = new ResourceDecisions(config.paseoHome);
+  } catch {
+    logger.warn("Resource decision journal is unavailable; dispatch remains enabled");
+  }
   agentManager.subscribe(
     (event) => {
       if (event.type !== "agent_state") return;
       try {
-        resourceDecisions.observe(event.agent);
+        resourceDecisions?.observe(event.agent);
       } catch {
         logger.warn("Resource outcome receipt could not be saved");
       }
@@ -1204,7 +1209,7 @@ export async function createPaseoDaemon(
     } catch {
       /* Discovery is evidence, never a prerequisite for the authorized task. */
     }
-    resourceDecisions.record(agent, usage);
+    resourceDecisions?.record(agent, usage);
   };
 
   const createAgentCommandDependencies: CreateAgentCommandDependencies = {

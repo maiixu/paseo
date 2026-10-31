@@ -4,7 +4,9 @@ type Usage = Omit<ProviderUsageListResponseMessage["payload"], "requestId">;
 export function summarizeUsage(usage: Usage, now = Date.now()) {
   const resources = usage.providers.flatMap((provider) => {
     // Empty account windows must not inherit the aggregate provider allowance.
-    const accounts = provider.accounts?.length ? provider.accounts : [provider];
+    const accounts = [...(provider.accounts ?? [provider])];
+    if (accounts.length === 0)
+      accounts.push({ ...provider, accountId: "unknown", windows: [], status: "unavailable" });
     return accounts.map((account) => {
       const accountId = "accountId" in account ? account.accountId : null;
       const fetchedAt = account.fetchedAt ?? provider.fetchedAt ?? usage.fetchedAt;
