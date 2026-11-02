@@ -188,14 +188,18 @@ export async function createAgentCommand(
     resolved.createOptions,
   );
 
-  // Record the selected configuration before inference; failure never replays creation.
-  try {
-    await dependencies.recordResourceDecision?.(snapshot);
-  } catch {
-    dependencies.logger.warn(
-      { agentId: snapshot.id },
-      "Resource decision receipt could not be saved",
-    );
+  // Record the selected configuration without blocking creation: the receipt may wait on
+  // provider usage discovery. Failure is logged and never replays creation.
+  const recordResourceDecision = dependencies.recordResourceDecision;
+  if (recordResourceDecision) {
+    void Promise.resolve()
+      .then(() => recordResourceDecision(snapshot))
+      .catch(() => {
+        dependencies.logger.warn(
+          { agentId: snapshot.id },
+          "Resource decision receipt could not be saved",
+        );
+      });
   }
 
   resolved.setupContinuation?.startAfterAgentCreate({

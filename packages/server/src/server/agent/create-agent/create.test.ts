@@ -95,6 +95,87 @@ test("session create forwards clientMessageId to the initial prompt run options"
   });
 });
 
+function createRecordingTestDependencies(
+  snapshot: ManagedAgent,
+  recordResourceDecision: (agent: ManagedAgent) => Promise<void>,
+) {
+  const streamAgent = vi.fn(() => (async function* noop() {})());
+  const onAgentReady = vi.fn(async () => {});
+  const dependencies: Parameters<typeof createAgentCommand>[0] = {
+    agentManager: {
+      createAgent: vi.fn(async () => snapshot),
+      getAgent: vi.fn(() => snapshot),
+      tryRunOutOfBand: vi.fn(() => false),
+      hasInFlightRun: vi.fn(() => false),
+      streamAgent,
+      waitForAgentRunStart: vi.fn(async () => undefined),
+    } as unknown as Parameters<typeof createAgentCommand>[0]["agentManager"],
+    agentStorage: {} as Parameters<typeof createAgentCommand>[0]["agentStorage"],
+    logger: createTestLogger(),
+    providerSnapshotManager: createProviderSnapshotManagerStub().manager,
+    recordResourceDecision,
+  };
+  const input: Parameters<typeof createAgentCommand>[1] = {
+    kind: "session",
+    config: { provider: "codex", cwd: "/tmp/paseo-create-test" },
+    workspaceId: "ws-create-test",
+    initialPrompt: "hello from create",
+    labels: {},
+    provisionalTitle: null,
+    firstAgentContext: { attachments: [] },
+    buildSessionConfig: async (config) => ({ sessionConfig: config }),
+    onAgentReady,
+  };
+  return { dependencies, input, streamAgent, onAgentReady };
+}
+
+test("session create does not wait for a never-resolving resource decision receipt", async () => {
+  const snapshot = {
+    id: "agent-1",
+    provider: "codex",
+    cwd: "/tmp/paseo-create-test",
+    runtimeInfo: null,
+  } as ManagedAgent;
+  const recordResourceDecision = vi.fn(() => new Promise<void>(() => {}));
+  const { dependencies, input, streamAgent, onAgentReady } = createRecordingTestDependencies(
+    snapshot,
+    recordResourceDecision,
+  );
+
+  const result = await Promise.race([
+    createAgentCommand(dependencies, input),
+    new Promise<"timed-out">((resolve) => setTimeout(() => resolve("timed-out"), 1000)),
+  ]);
+
+  expect(result).not.toBe("timed-out");
+  expect(recordResourceDecision).toHaveBeenCalledWith(snapshot);
+  expect(onAgentReady).toHaveBeenCalledWith(snapshot);
+  expect(streamAgent).toHaveBeenCalledTimes(1);
+});
+
+test("session create survives a failing resource decision receipt without replaying creation", async () => {
+  const snapshot = {
+    id: "agent-1",
+    provider: "codex",
+    cwd: "/tmp/paseo-create-test",
+    runtimeInfo: null,
+  } as ManagedAgent;
+  const recordResourceDecision = vi.fn(() => {
+    throw new Error("disk full");
+  });
+  const { dependencies, input, streamAgent } = createRecordingTestDependencies(
+    snapshot,
+    recordResourceDecision,
+  );
+
+  const result = await createAgentCommand(dependencies, input);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  expect(result.snapshot).toBe(snapshot);
+  expect(dependencies.agentManager.createAgent).toHaveBeenCalledTimes(1);
+  expect(streamAgent).toHaveBeenCalledTimes(1);
+});
+
 test("session create validates the requested mode against the provider's modes", async () => {
   const snapshot = {
     id: "agent-1",
