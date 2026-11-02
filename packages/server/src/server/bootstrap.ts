@@ -1185,7 +1185,7 @@ export async function createPaseoDaemon(
 
   let resourceDecisions: ResourceDecisions | null = null;
   try {
-    resourceDecisions = new ResourceDecisions(config.paseoHome);
+    resourceDecisions = new ResourceDecisions(config.paseoHome, logger);
   } catch {
     logger.warn("Resource decision journal is unavailable; dispatch remains enabled");
   }
