@@ -492,9 +492,10 @@ export class ProviderCatalogSession {
     msg: Extract<SessionInboundMessage, { type: "provider.usage.list.request" }>,
   ): Promise<void> {
     try {
-      const usage = await this.providerUsageService.listUsage(
-        msg.agentId ? { agentId: msg.agentId } : undefined,
-      );
+      const usage = await this.providerUsageService.listUsage({
+        ...(msg.agentId ? { agentId: msg.agentId } : {}),
+        ...(msg.forceRefresh ? { forceRefresh: true } : {}),
+      });
       this.host.emit({
         type: "provider.usage.list.response",
         payload: {

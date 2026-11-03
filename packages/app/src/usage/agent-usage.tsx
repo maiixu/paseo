@@ -1,3 +1,4 @@
+import { useCallback } from "react";
 import { useSessionStore } from "@/stores/session-store";
 import { useProviderUsage } from "@/provider-usage/use-provider-usage";
 import { ProviderUsageTooltipSection } from "@/provider-usage/tooltip-section";
@@ -27,13 +28,31 @@ export function AgentUsage({
   const provider = useSessionStore(
     (state) => state.sessions[serverId]?.agents.get(agentId)?.provider,
   );
-  if (provider === "codex") return <RoutedCodexUsage serverId={serverId} agentId={agentId} />;
+  if (provider === "codex")
+    return <RoutedCodexUsage serverId={serverId} agentId={agentId} refreshable={refreshable} />;
   return <PluginAgentUsage serverId={serverId} agentId={agentId} refreshable={refreshable} />;
 }
 
-function RoutedCodexUsage({ serverId, agentId }: { serverId: string; agentId: string }) {
-  const { view } = useProviderUsage(serverId, { agentId });
-  return <ProviderUsageTooltipSection view={view} activeProviderId="codex" />;
+function RoutedCodexUsage({
+  serverId,
+  agentId,
+  refreshable,
+}: {
+  serverId: string;
+  agentId: string;
+  refreshable: boolean;
+}) {
+  const { view, refresh } = useProviderUsage(serverId, { agentId });
+  const onRefresh = useCallback(() => {
+    void refresh().catch(() => {});
+  }, [refresh]);
+  return (
+    <ProviderUsageTooltipSection
+      view={view}
+      activeProviderId="codex"
+      onRefresh={refreshable ? onRefresh : undefined}
+    />
+  );
 }
 
 function PluginAgentUsage({
