@@ -51,6 +51,29 @@ function routedAccountReport(
   };
 }
 
+// The router config read can fail with errors that embed absolute paths (ENOENT, JSON parse,
+// schema). Clients receive only a category; the full error stays in the daemon log.
+function routedUsageErrorMessage(error: unknown): string {
+  if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT")
+    return "Account router configuration is missing";
+  if (error instanceof SyntaxError) return "Account router configuration is not valid JSON";
+  if (error instanceof Error && error.name === "ZodError")
+    return "Account router configuration is invalid";
+  return "Account router configuration is unavailable";
+}
+
+function routedErrorReport(error: string): UsageReportEntry {
+  return {
+    id: "codex-router:config",
+    account: {},
+    fetchedAt: new Date().toISOString(),
+    sourceId: "codex-router",
+    sourceLabel: "Codex accounts",
+    icon: "codex",
+    report: { status: "error", error },
+  };
+}
+
 export class UsageSession {
   constructor(private readonly options: UsageSessionOptions) {}
 
@@ -59,13 +82,22 @@ export class UsageSession {
   ): Promise<void> {
     try {
       if (!this.options.runtime) throw new Error("Plugin runtime is unavailable");
-      const routed = await this.options.routedUsage?.listRoutedUsage(msg.agentId, msg.forceRefresh);
-      const useRouted = Boolean(routed && (!msg.agentId || routed.routing));
       const emitReport = (report: UsageReportEntry) =>
         this.options.emit({
           type: "usage.list_reports.update",
           payload: { requestId: msg.requestId, report },
         });
+      let routed: RoutedUsage | null = null;
+      try {
+        routed =
+          (await this.options.routedUsage?.listRoutedUsage(msg.agentId, msg.forceRefresh)) ?? null;
+      } catch (error) {
+        // A broken router config must not take down the plugin reports.
+        this.options.logger.warn({ err: error }, "Failed to read routed account usage");
+        if (!msg.reportIds || msg.reportIds.some((id) => id.startsWith("codex-router:")))
+          emitReport(routedErrorReport(routedUsageErrorMessage(error)));
+      }
+      const useRouted = Boolean(routed && (!msg.agentId || routed.routing));
       if (useRouted && routed) {
         for (const account of routed.accounts) {
           const id = `codex-router:${account.accountId}`;
