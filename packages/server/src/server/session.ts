@@ -110,7 +110,10 @@ import type {
   AgentTimelineFetchResult,
   ManagedAgent,
 } from "./agent/agent-manager.js";
-import { createAgentCommand } from "./agent/create-agent/create.js";
+import {
+  createAgentCommand,
+  type CreateAgentCommandDependencies,
+} from "./agent/create-agent/create.js";
 import { resolveCreateAgentIntent, type CreateAgentIntent } from "./agent/create-agent/intent.js";
 import {
   archiveAgentCommand,
@@ -441,6 +444,8 @@ type AgentMcpTransportFactory = () => Promise<unknown>;
 
 export interface SessionOptions {
   browserToolsBroker?: BrowserToolsBroker | null;
+  /** Journals the selected resource configuration for every created agent (non-blocking). */
+  recordResourceDecision?: CreateAgentCommandDependencies["recordResourceDecision"];
   clientId: string;
   permissions: readonly DaemonPermission[];
   appVersion?: string | null;
@@ -698,6 +703,7 @@ export class Session {
       ),
   );
   private readonly browserToolsBroker: SessionOptions["browserToolsBroker"];
+  private readonly recordResourceDecision: SessionOptions["recordResourceDecision"];
   private readonly clientId: string;
   private readonly authorization: SessionAuthorization;
   private appVersion: string | null;
@@ -860,6 +866,7 @@ export class Session {
       getWebSocketRuntimeMetrics,
     } = options;
     this.browserToolsBroker = options.browserToolsBroker;
+    this.recordResourceDecision = options.recordResourceDecision;
     this.clientId = clientId;
     this.authorization = new SessionAuthorization(permissions);
     this.appVersion = appVersion ?? null;
@@ -4285,6 +4292,7 @@ export class Session {
           paseoHome: this.paseoHome,
           worktreesRoot: this.worktreesRoot,
           providerSnapshotManager: this.providerSnapshotManager,
+          recordResourceDecision: this.recordResourceDecision,
         },
         {
           kind: "session",
