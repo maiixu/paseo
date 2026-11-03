@@ -16,9 +16,12 @@ export function providerUsageQueryKey(serverId: string | null | undefined, agent
 
 async function fetchProviderUsage(
   client: ProviderUsageClient,
-  agentId?: string,
+  options: { agentId?: string; forceRefresh?: boolean },
 ): Promise<ProviderUsageListPayload> {
-  return client.listProviderUsage(agentId ? { agentId } : undefined);
+  return client.listProviderUsage({
+    ...(options.agentId ? { agentId: options.agentId } : {}),
+    ...(options.forceRefresh ? { forceRefresh: true } : {}),
+  });
 }
 
 interface UseProviderUsageOptions {
@@ -51,7 +54,7 @@ export function useProviderUsage(
     if (!client) {
       throw new Error(providerUsageCopy.clientUnavailable);
     }
-    return fetchProviderUsage(client, options.agentId);
+    return fetchProviderUsage(client, { agentId: options.agentId });
   }, [client, options.agentId]);
 
   const query = useQuery({
@@ -65,15 +68,17 @@ export function useProviderUsage(
     refetchInterval: enabled && options.agentId ? 30_000 : false,
   });
 
+  // An explicit Refresh bypasses the daemon's provider and account caches; the poll does not.
+  // Cancel an in-flight poll first so the forced fetch is not deduplicated into it.
   const refresh = useCallback(async () => {
-    if (!canFetch) return;
-    await queryClient.invalidateQueries({ queryKey });
+    if (!canFetch || !client) return;
+    await queryClient.cancelQueries({ queryKey });
     await queryClient.fetchQuery({
       queryKey,
-      queryFn,
-      staleTime: PROVIDER_USAGE_STALE_TIME_MS,
+      queryFn: () => fetchProviderUsage(client, { agentId: options.agentId, forceRefresh: true }),
+      staleTime: 0,
     });
-  }, [canFetch, queryClient, queryFn, queryKey]);
+  }, [canFetch, client, options.agentId, queryClient, queryKey]);
 
   const view = useMemo<ProviderUsageView>(() => {
     if (!serverId || !client || !isConnected) {

@@ -324,6 +324,53 @@ describe("ProviderCatalogSession", () => {
     );
   });
 
+  it("forceRefresh bypasses the provider usage cache; plain requests reuse it", async () => {
+    let calls = 0;
+    const service = new ProviderUsageService({
+      logger: pino({ level: "silent" }),
+      fetchers: [
+        {
+          providerId: "claude",
+          displayName: "Claude",
+          fetchUsage: async () => {
+            calls += 1;
+            return {
+              providerId: "claude",
+              displayName: "Claude",
+              status: "available" as const,
+              planLabel: null,
+              windows: [{ id: "session", label: "Session", usedPct: calls }],
+            };
+          },
+        },
+      ],
+    });
+    const { subsystem, emitted } = makeSubsystem({
+      usage: { listUsage: (options) => service.listUsage(options) },
+    });
+    const usedPct = () =>
+      emitted
+        .filter((message) => message.type === "provider.usage.list.response")
+        .map((message) => message.payload.providers[0]?.windows[0]?.usedPct);
+
+    await subsystem.handleProviderUsageListRequest({
+      type: "provider.usage.list.request",
+      requestId: "first",
+    });
+    await subsystem.handleProviderUsageListRequest({
+      type: "provider.usage.list.request",
+      requestId: "poll",
+    });
+    await subsystem.handleProviderUsageListRequest({
+      type: "provider.usage.list.request",
+      requestId: "refresh",
+      forceRefresh: true,
+    });
+
+    expect(usedPct()).toEqual([1, 1, 2]);
+    expect(calls).toBe(2);
+  });
+
   it("surfaces a usage-list failure as an rpc_error envelope", async () => {
     const { subsystem, emitted } = makeSubsystem({
       usage: {

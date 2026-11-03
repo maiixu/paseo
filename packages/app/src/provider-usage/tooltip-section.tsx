@@ -1,5 +1,7 @@
+import { RefreshCw } from "lucide-react-native";
 import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
+import { Button } from "@/components/ui/button";
 import { ProviderAccountUsage } from "./accounts";
 import { ProviderUsageCard } from "./card";
 import { providerUsageCopy } from "./copy";
@@ -20,9 +22,12 @@ function matchProvider(
 export function ProviderUsageTooltipSection({
   view,
   activeProviderId,
+  onRefresh,
 }: {
   view: ProviderUsageView;
   activeProviderId: string | null | undefined;
+  /** Explicit Refresh: bypasses the host's usage caches. Omitted where the surface cannot be pressed. */
+  onRefresh?: () => void;
 }) {
   if (view.kind === "loading") {
     return (
@@ -54,6 +59,21 @@ export function ProviderUsageTooltipSection({
       ) : (
         <ProviderUsageCard usage={usage} compact />
       )}
+      {onRefresh ? (
+        <View style={styles.refreshRow}>
+          <Button
+            variant="ghost"
+            size="sm"
+            leftIcon={RefreshCw}
+            loading={view.isRefreshing}
+            onPress={onRefresh}
+            accessibilityLabel={providerUsageCopy.refresh}
+            testID="provider-usage-refresh"
+          >
+            {view.isRefreshing ? providerUsageCopy.refreshing : providerUsageCopy.refresh}
+          </Button>
+        </View>
+      ) : null}
     </>
   );
 }
@@ -67,6 +87,10 @@ const styles = StyleSheet.create((theme) => ({
     marginVertical: theme.spacing[2],
     // Cancel the tooltip content's horizontal padding so the rule spans edge to edge.
     marginHorizontal: -theme.spacing[2],
+  },
+  refreshRow: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
   },
   detail: {
     color: theme.colors.foregroundMuted,

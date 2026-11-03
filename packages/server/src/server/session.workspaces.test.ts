@@ -1372,6 +1372,86 @@ test("create_agent_request does not title an existing workspace from the agent p
   }
 });
 
+test("create_agent_request journals the resource decision for the created agent", async () => {
+  const workdir = mkdtempSync(path.join(tmpdir(), "paseo-create-agent-resource-decision-"));
+  try {
+    const cwd = path.join(workdir, "repo");
+    mkdirSync(cwd, { recursive: true });
+    const logger = createTestLogger();
+    const agentStorage = new AgentStorage(path.join(workdir, "agents"), logger);
+    const agentManager = new AgentManager({
+      clients: { codex: new CreateAgentTestClient() },
+      registry: agentStorage,
+      logger,
+      idFactory: () => "00000000-0000-4000-8000-000000000553",
+    });
+    const recorded: string[] = [];
+    const session = asTestSession(
+      new Session({
+        messageReceipts: createMessageReceiptsStub(),
+        creationService: createTestCreationService(),
+        clientId: "test-client",
+        permissions: OWNER_PERMISSIONS,
+        appVersion: null,
+        onMessage: vi.fn(),
+        logger,
+        downloadTokenStore: asDownloadTokenStore(),
+        pushNotifications: asPushNotifications(),
+        paseoHome: path.join(workdir, "paseo-home"),
+        agentManager,
+        agentStorage,
+        projectRegistry: new FileBackedProjectRegistry(path.join(workdir, "projects.json"), logger),
+        workspaceRegistry: new FileBackedWorkspaceRegistry(
+          path.join(workdir, "workspaces.json"),
+          logger,
+        ),
+        scheduleService: asScheduleService(),
+        checkoutDiffManager: asCheckoutDiffManager({
+          subscribe: async () => ({
+            initial: { cwd, files: [], error: null },
+            unsubscribe: () => {},
+          }),
+          scheduleRefreshForCwd: () => {},
+          onWorkspaceStateMayHaveChanged: () => {},
+          invalidateForge: () => {},
+          getMetrics: () => ({
+            checkoutDiffTargetCount: 0,
+            checkoutDiffSubscriptionCount: 0,
+            checkoutDiffWatcherCount: 0,
+            checkoutDiffFallbackRefreshTargetCount: 0,
+          }),
+          dispose: () => {},
+        }),
+        workspaceGitService: createNoopWorkspaceGitService(),
+        daemonConfigStore: asDaemonConfigStore({
+          get: () => ({ mcp: { injectIntoAgents: false }, providers: {} }),
+          onChange: () => () => {},
+        }),
+        mcpBaseUrl: null,
+        stt: null,
+        tts: null,
+        providerSnapshotManager: createProviderSnapshotManagerStub().manager,
+        terminalManager: null,
+        recordResourceDecision: async (agent) => {
+          recorded.push(agent.id);
+        },
+      }),
+    );
+
+    await session.handleMessage({
+      type: "create_agent_request",
+      requestId: "req-create-resource-decision",
+      config: { provider: "codex", cwd },
+      attachments: [],
+    });
+    // Recording is deliberately non-blocking, so it settles after the create response.
+    await vi.waitFor(() => expect(recorded).toEqual(["00000000-0000-4000-8000-000000000553"]));
+    expect(agentManager.listAgents().map((agent) => agent.id)).toEqual(recorded);
+  } finally {
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
 test("unsupported persisted agents are excluded from active lists but preserved in history payloads", async () => {
   const session = createSessionForWorkspaceTests({ appVersion: "0.1.45" });
   const storedRecord = {

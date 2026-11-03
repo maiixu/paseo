@@ -10,7 +10,9 @@ separately. Account aliases, allowance windows, reset times and fetch timestamps
 reach the client; credentials, account home paths and native histories do not.
 Each account uses only its own auth file. Missing/expired credentials remain
 unavailable instead of borrowing the primary account. Reading usage does not
-refresh credentials, run inference, or change the route.
+refresh credentials, run inference, or change the route. A missing or invalid
+router configuration becomes one `codex-router:` error report that names the
+category, never the path; the other usage reports still load.
 
 The optional request `agentId` resolves through the daemon's agent manager to a
 native thread. The router's ownership ledger identifies its assigned account and
@@ -19,8 +21,11 @@ route is read on every request, independently of the one-minute account quota
 cache. Existing untracked threads identify the router's original-account policy;
 missing thread identity and unreadable ledgers are explicitly distinguished.
 
-The tooltip refreshes every thirty seconds while open. Account windows display
-remaining allowance and the duration returned by the provider, with an update
+The tooltip polls every thirty seconds while open. The poll is served from the
+daemon's caches: five minutes for provider usage, one minute per routed account.
+The tooltip's Refresh action sends `forceRefresh`, which bypasses both caches;
+the poll never does. Daemons without the flag ignore it and serve cached usage.
+Account windows display remaining allowance and the duration returned by the provider, with an update
 age. A failed refresh identifies retained data rather than presenting it as fresh.
 The request and response fields are optional: older clients retain their ordinary
 provider card, and hosts without a router keep their existing single-account view.
@@ -33,7 +38,8 @@ cannot be offset by another window or account. The output never pools allowance.
 Configured switching mode and the worker's observed mode are separate: missing
 worker observation does not prove that an old process adopted a live pause.
 
-New agent creation records the selected provider/model and pre-inference usage
+Every new agent, whether created from the app, `paseo run`, or an agent's
+`create_agent` tool, records the selected provider/model and pre-inference usage
 snapshot in `resource-decisions/decisions.jsonl` under the owning daemon home.
 Supply `paseo.resource-reason` as an agent label to retain the reason; otherwise
 it records explicit requested configuration, not an inferred optimization.

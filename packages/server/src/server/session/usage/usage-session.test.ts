@@ -1,6 +1,10 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import pino from "pino";
 import { expect, test } from "vitest";
 import type { SessionOutboundMessage } from "../../messages.js";
+import { AccountRouterUsage } from "../../../services/quota-fetcher/account-router.js";
 import { UsageSession } from "./usage-session.js";
 
 test("lists reports from usage sources", async () => {
@@ -136,4 +140,57 @@ test("routed accounts replace the default-home report and preserve other provide
   expect(updates[0].payload.report.report).toMatchObject({
     details: [{ label: "Current account", value: "plus · quota_wait" }],
   });
+});
+
+test("a broken router config yields one sanitized error report and keeps plugin reports", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "paseo-usage-router-"));
+  const configPath = path.join(dir, "missing-router-config.json");
+  try {
+    const router = new AccountRouterUsage({
+      logger: pino({ level: "silent" }),
+      getCommand: () => ["python3", "/opt/paseo-codex-router.py", "--router-config", configPath],
+      getAgent: () => null,
+    });
+    const emitted: SessionOutboundMessage[] = [];
+    const usage = new UsageSession({
+      emit: (message) => emitted.push(message),
+      logger: pino({ level: "silent" }),
+      routedUsage: { listRoutedUsage: (agentId, force) => router.read(agentId, force) },
+      runtime: {
+        async listUsageReports(options) {
+          options.onReport?.({
+            id: "claude",
+            sourceId: "claude",
+            sourceLabel: "Claude",
+            account: {},
+            fetchedAt: "2026-10-17T00:00:00.000Z",
+            report: { status: "available", windows: [] },
+          });
+          return [];
+        },
+        async listLegacyUsage() {
+          return { fetchedAt: "", providers: [] };
+        },
+      },
+    });
+
+    await usage.handleListReports({ type: "usage.list_reports.request", requestId: "r" });
+
+    const updates = emitted.filter((event) => event.type === "usage.list_reports.update");
+    expect(updates.map((event) => event.payload.report.id)).toEqual([
+      "codex-router:config",
+      "claude",
+    ]);
+    expect(updates[0].payload.report.report).toEqual({
+      status: "error",
+      error: "Account router configuration is missing",
+    });
+    expect(JSON.stringify(emitted)).not.toContain(dir);
+    expect(emitted.at(-1)).toEqual({
+      type: "usage.list_reports.response",
+      payload: { requestId: "r", error: null },
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
