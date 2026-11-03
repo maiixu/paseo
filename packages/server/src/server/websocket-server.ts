@@ -757,6 +757,7 @@ export class VoiceAssistantWebSocketServer {
 
     this.providerUsageService = new ProviderUsageService({
       logger: this.logger,
+      pluginUsage: this.pluginRuntime,
       accountRouter: {
         logger: this.logger,
         getCommand: () => this.daemonConfigStore.get().providers?.codex?.command,

@@ -1,5 +1,4 @@
 import { existsSync, promises as fs } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Logger } from "pino";
 import { z } from "zod";
@@ -64,8 +63,8 @@ type CodexUsageResponse = z.infer<typeof CodexUsageResponseSchema>;
 
 interface CodexQuotaProviderOptions {
   logger: Logger;
-  codexHome?: string;
-  strictHome?: boolean;
+  /** The account's own Codex home. Only `<codexHome>/auth.json` is read. */
+  codexHome: string;
   fetch?: ProviderApiFetch;
 }
 
@@ -92,13 +91,11 @@ export class CodexQuotaProvider implements ProviderUsageFetcher {
   readonly displayName = "Codex";
 
   private readonly codexHome: string;
-  private readonly strictHome: boolean;
   private readonly fetchApi: ProviderApiFetch;
 
   constructor(options: CodexQuotaProviderOptions) {
-    this.codexHome = options.codexHome || process.env["CODEX_HOME"] || join(homedir(), ".codex");
+    this.codexHome = options.codexHome;
     this.fetchApi = options.fetch ?? fetch;
-    this.strictHome = options.strictHome ?? false;
   }
 
   async fetchUsage(): Promise<ProviderUsage> {
@@ -183,13 +180,8 @@ export class CodexQuotaProvider implements ProviderUsageFetcher {
   }
 
   private async readCodexAuth(): Promise<CodexAuth | null> {
-    const candidates = this.strictHome
-      ? [join(this.codexHome, "auth.json")]
-      : [
-          ...(process.env["CODEX_HOME"] ? [join(process.env["CODEX_HOME"], "auth.json")] : []),
-          join(homedir(), ".config", "codex", "auth.json"),
-          join(this.codexHome, "auth.json"),
-        ];
+    // Each routed account uses only its own auth file, never the ambient Codex login.
+    const candidates = [join(this.codexHome, "auth.json")];
     for (const path of candidates) {
       if (!existsSync(path)) continue;
       try {

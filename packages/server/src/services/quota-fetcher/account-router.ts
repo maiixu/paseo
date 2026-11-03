@@ -134,7 +134,6 @@ export class AccountRouterUsage {
               const usage = await new CodexQuotaProvider({
                 logger: this.options.logger,
                 codexHome: expand(account.home),
-                strictHome: true,
                 fetch: this.options.fetch,
               }).fetchUsage();
               return {
