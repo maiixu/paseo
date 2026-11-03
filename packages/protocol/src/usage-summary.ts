@@ -43,7 +43,10 @@ function windowAllowance(
 ): UsageAllowance {
   const remaining = window.remainingPct;
   const validPercent =
-    typeof remaining === "number" && Number.isFinite(remaining) && remaining >= 0 && remaining <= 100;
+    typeof remaining === "number" &&
+    Number.isFinite(remaining) &&
+    remaining >= 0 &&
+    remaining <= 100;
   const validReset = window.resetsAt === null || Date.parse(window.resetsAt) > now;
   if (!validPercent || !validReset) return "unknown";
   return remaining === 0 ? "exhausted" : "remaining";

@@ -27,7 +27,9 @@ const schema: OutputSchema<Summary> = {
           `  ${w.label}${w.scope === "general" ? "" : ` [${w.scope}]`}: ${w.remainingPct ?? "?"}% remaining; reset ${w.resetsAt ?? "unknown"}`,
         );
     }
-    lines.push("Account allowance reads general windows only; [model]/[surface] windows are reported separately.");
+    lines.push(
+      "Account allowance reads general windows only; [model]/[surface] windows are reported separately.",
+    );
     lines.push("Allowance is not authorization or execution admission; windows are not pooled.");
     return lines.join("\n");
   },

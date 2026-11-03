@@ -4,6 +4,7 @@ import { join } from "node:path";
 import pino from "pino";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UsageSourceRegistry, type UsageSource } from "../../server/plugins/usage-sources/index.js";
+import type { ProviderUsage } from "../../server/messages.js";
 import { ProviderUsageService } from "./service.js";
 
 const logger = pino({ enabled: false });
@@ -17,6 +18,12 @@ function source(id: string, label: string) {
   }));
   const usageSource: UsageSource = { id, label, discover, fetch };
   return { usageSource, discover, fetch };
+}
+
+function accountIds(providers: ProviderUsage[], providerId: string): string[] | undefined {
+  return providers
+    .find((provider) => provider.providerId === providerId)
+    ?.accounts?.map((account) => account.accountId);
 }
 
 function registry() {
@@ -150,8 +157,7 @@ describe("ProviderUsageService", () => {
       const result = await service.listUsage();
 
       expect(calls.sort()).toEqual(["Bearer plus", "Bearer pro"]);
-      const codex = result.providers.find((provider) => provider.providerId === "codex");
-      expect(codex?.accounts?.map((account) => account.accountId)).toEqual(["plus", "pro"]);
+      expect(accountIds(result.providers, "codex")).toEqual(["plus", "pro"]);
     });
 
     it("reports routed accounts when the Codex usage source is disabled", async () => {
