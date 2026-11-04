@@ -143,10 +143,15 @@ it("rejects invalid thread paths and never reports an unknown ledger account", a
   expect((await usage.read("agent"))?.routing?.status).toBe("unknown");
 });
 
-it("explicit refresh bypasses account quota cache", async () => {
+it("explicit refresh bypasses account quota cache once it is 30 s old", async () => {
   await ledger("plus");
-  await usage.read("agent");
+  const first = await usage.read("agent");
   now += 1000;
+  // Inside the floor a forced refresh is served from the cache: no upstream calls.
+  const early = await usage.read("agent", true);
+  expect(calls).toHaveLength(2);
+  expect(early?.accounts[0].fetchedAt).toBe(first?.accounts[0].fetchedAt);
+  now += 29_000;
   const refreshed = await usage.read("agent", true);
   expect(calls).toHaveLength(4);
   expect(refreshed?.accounts[0].fetchedAt).toBe(new Date(now).toISOString());

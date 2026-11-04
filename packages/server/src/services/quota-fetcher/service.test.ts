@@ -263,7 +263,17 @@ describe("ProviderUsageService", () => {
 
     expect(claudeFetch).not.toHaveBeenCalled();
     expect(cursorFetch).not.toHaveBeenCalled();
-    expect(result.providers.map((provider) => provider.providerId)).toEqual(["codex"]);
+    expect(
+      result.providers.map((provider) => [
+        provider.providerId,
+        provider.status,
+        provider.error ?? null,
+      ]),
+    ).toEqual([
+      ["claude", "unavailable", "Usage source disabled"],
+      ["cursor", "unavailable", "Usage source disabled"],
+      ["codex", "available", null],
+    ]);
   });
 
   it("reports Codex router accounts even when the codex usage source is disabled", async () => {
@@ -318,7 +328,7 @@ describe("ProviderUsageService", () => {
     }
   });
 
-  it("drops a cached provider once its usage source is disabled and fetches it once enabled", async () => {
+  it("reports a cached provider as disabled once its usage source is disabled and fetches it once enabled", async () => {
     const enabled = new Set(["claude", "codex"]);
     const claudeFetch = vi.fn(async () => ({
       providerId: "claude",
@@ -348,7 +358,11 @@ describe("ProviderUsageService", () => {
 
     enabled.delete("claude");
     const disabled = await service.listUsage();
-    expect(disabled.providers.map((provider) => provider.providerId)).toEqual(["codex"]);
+    expect(disabled.providers.map((provider) => [provider.providerId, provider.status])).toEqual([
+      ["claude", "unavailable"],
+      ["codex", "available"],
+    ]);
+    expect(findProvider(disabled, "claude").error).toBe("Usage source disabled");
     expect(claudeFetch).toHaveBeenCalledTimes(1);
 
     enabled.add("claude");
@@ -389,7 +403,7 @@ describe("ProviderUsageService", () => {
     const refreshed = await service.listUsage({ forceRefresh: true });
 
     expect(calls).toBe(2);
-    expect(cached).toBe(first);
+    expect(cached).toEqual(first);
     expect(refreshed.providers[0]?.windows[0]?.usedPct).toBe(2);
   });
 
@@ -427,8 +441,167 @@ describe("ProviderUsageService", () => {
     });
 
     const [firstResult, secondResult] = await Promise.all([first, second]);
-    expect(firstResult).toBe(secondResult);
+    expect(firstResult).toEqual(secondResult);
     expect(calls).toBe(1);
+  });
+
+  it("ignores forceRefresh while the cache is younger than 30 s", async () => {
+    let now = Date.parse("2026-11-04T00:00:00.000Z");
+    let calls = 0;
+    const service = new ProviderUsageService({
+      usageSources: allUsageSourcesEnabled,
+      logger: createLogger(),
+      now: () => now,
+      fetchers: [
+        {
+          providerId: "claude",
+          displayName: "Claude",
+          fetchUsage: async () => {
+            calls += 1;
+            return {
+              providerId: "claude",
+              displayName: "Claude",
+              status: "available",
+              planLabel: null,
+              windows: [],
+            };
+          },
+        },
+      ],
+    });
+
+    await service.listUsage();
+    for (let press = 0; press < 5; press += 1) {
+      now += 5_000;
+      await service.listUsage({ forceRefresh: true });
+    }
+    expect(calls).toBe(1);
+    now += 5_000;
+    await service.listUsage({ forceRefresh: true });
+    expect(calls).toBe(2);
+  });
+
+  it("keeps the last good provider entry, marked stale, when a refresh fails", async () => {
+    let now = Date.parse("2026-11-04T00:00:00.000Z");
+    const results: Array<() => Promise<ProviderUsage>> = [
+      async () => ({
+        providerId: "claude",
+        displayName: "Claude",
+        status: "available",
+        planLabel: "Max 20x",
+        windows: [{ id: "weekly", label: "Weekly", usedPct: 40, remainingPct: 60 }],
+        details: [{ id: "extra_usage", label: "Extra usage", value: "Enabled" }],
+      }),
+      async () => {
+        throw new Error("Claude usage API returned 429");
+      },
+    ];
+    let call = 0;
+    const service = new ProviderUsageService({
+      usageSources: allUsageSourcesEnabled,
+      logger: createLogger(),
+      now: () => now,
+      fetchers: [
+        {
+          providerId: "claude",
+          displayName: "Claude",
+          fetchUsage: () => results[Math.min(call++, results.length - 1)]!(),
+        },
+      ],
+    });
+    const firstFetchedAt = new Date(now).toISOString();
+    await service.listUsage();
+    now += 60_000;
+    const refreshed = await service.listUsage({ forceRefresh: true });
+    now += 140_000; // the next ordinary poll, e.g. the steward's
+    const polled = await service.listUsage();
+
+    for (const result of [refreshed, polled]) {
+      const claude = findProvider(result, "claude");
+      expect(claude).toMatchObject({
+        status: "available",
+        windows: [{ id: "weekly", usedPct: 40 }],
+        details: [{ id: "extra_usage", value: "Enabled" }],
+        fetchedAt: firstFetchedAt,
+      });
+      expect(claude.error).toContain("429");
+      expect(claude.error).toContain(firstFetchedAt);
+    }
+  });
+
+  it("reports a failed first fetch as unavailable when there is no previous answer", async () => {
+    const service = new ProviderUsageService({
+      usageSources: allUsageSourcesEnabled,
+      logger: createLogger(),
+      fetchers: [
+        {
+          providerId: "claude",
+          displayName: "Claude",
+          fetchUsage: async () => {
+            throw new Error("Claude usage API returned 429");
+          },
+        },
+      ],
+    });
+    expect(findProvider(await service.listUsage(), "claude")).toMatchObject({
+      status: "error",
+      error: "Claude usage API returned 429",
+    });
+  });
+
+  it("does not let a superseded in-flight request overwrite the current cache", async () => {
+    let enabled = new Set(["claude", "codex"]);
+    let releaseCodex!: () => void;
+    const codexGate = new Promise<void>((resolve) => {
+      releaseCodex = resolve;
+    });
+    let claudeCalls = 0;
+    const service = new ProviderUsageService({
+      usageSources: { isEnabled: (sourceId) => enabled.has(sourceId) },
+      logger: createLogger(),
+      now: () => Date.parse("2026-11-04T00:00:00.000Z"),
+      fetchers: [
+        {
+          providerId: "claude",
+          displayName: "Claude",
+          fetchUsage: async () => {
+            claudeCalls += 1;
+            return {
+              providerId: "claude",
+              displayName: "Claude",
+              status: "available",
+              planLabel: null,
+              windows: [],
+            };
+          },
+        },
+        {
+          providerId: "codex",
+          displayName: "Codex",
+          fetchUsage: async () => {
+            await codexGate;
+            return {
+              providerId: "codex",
+              displayName: "Codex",
+              status: "available",
+              planLabel: null,
+              windows: [],
+            };
+          },
+        },
+      ],
+    });
+
+    const stale = service.listUsage();
+    enabled = new Set(["claude"]);
+    await service.listUsage();
+    releaseCodex();
+    await stale;
+    expect(claudeCalls).toBe(2);
+
+    // The claude-only cache survived, so this is served without fetching.
+    await service.listUsage();
+    expect(claudeCalls).toBe(2);
   });
 
   it("isolates one provider error without dropping other providers", async () => {
@@ -611,7 +784,24 @@ describe("real provider usage fetchers", () => {
       usageSources: onlyUsageSources(),
     }).listUsage();
 
-    expect(result.providers).toEqual([]);
+    // Every provider stays findable by ID, reported as a disabled source.
+    expect(result.providers.map((provider) => provider.providerId)).toEqual([
+      "claude",
+      "codex",
+      "copilot",
+      "cursor",
+      "zai",
+      "grok",
+      "kimi",
+      "minimax",
+    ]);
+    for (const provider of result.providers) {
+      expect(provider).toMatchObject({
+        status: "unavailable",
+        error: "Usage source disabled",
+        windows: [],
+      });
+    }
     expect(keychain).not.toHaveBeenCalled();
     expect(fetchApi).not.toHaveBeenCalled();
   });
@@ -636,7 +826,9 @@ describe("real provider usage fetchers", () => {
     const result = await service({ usageSources: onlyUsageSources("claude") }).listUsage();
 
     // maiixu/intelligence scripts/paseo-steward-rpc.mjs (mode claude-usage) reads exactly this.
-    expect(result.providers.map((provider) => provider.providerId)).toEqual(["claude"]);
+    expect(
+      result.providers.filter((provider) => provider.error !== "Usage source disabled"),
+    ).toHaveLength(1);
     const claude = findProvider(result, "claude");
     expect(claude.status).toBe("available");
     expect(claude.windows).toEqual(

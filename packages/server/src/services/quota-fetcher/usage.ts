@@ -8,6 +8,11 @@ import type {
 import type { ProviderApiFetch } from "./provider.js";
 
 const PROVIDER_HTTP_TIMEOUT_MS = 15_000;
+/**
+ * A forced refresh is honored only once the cached usage is at least this old, so repeated
+ * Refresh presses do not become repeated upstream calls and provider rate limits.
+ */
+export const MIN_FORCED_REFRESH_INTERVAL_MS = 30_000;
 
 export const ApiNumberSchema = z.coerce.number().finite();
 export const ApiNullableNumberSchema = z.preprocess(

@@ -8,9 +8,10 @@ provider-usage RPC owns the allowance, not the host serving the Web files.
 fetchers (`packages/server/src/services/quota-fetcher/`). A fetcher runs only while the
 plugin usage source with the same ID (`claude`, `codex`, `cursor`, ...) is registered in
 the plugin runtime ([docs/plugins.md](plugins.md#usage-sources)). A disabled source is
-skipped before its credentials are read or its API is called, and drops out of the cached
-result on the next request. The Codex account router below is not a usage source and is
-unaffected.
+skipped before its credentials are read or its API is called. It still appears in the
+response, as `unavailable` with error `Usage source disabled`, so a consumer that looks a
+provider up by ID always finds it. The Codex account router below is not a usage source
+and is unaffected.
 
 On a host whose live Codex command selects `paseo-codex-router.py`, the daemon reads
 that command's explicit configuration and reports each configured subscription
@@ -31,10 +32,15 @@ missing thread identity and unreadable ledgers are explicitly distinguished.
 
 The tooltip polls every thirty seconds while open. The poll is served from the
 daemon's caches: five minutes for provider usage, one minute per routed account.
-The tooltip's Refresh action sends `forceRefresh`, which bypasses both caches;
-the poll never does. Daemons without the flag ignore it and serve cached usage.
+The tooltip's Refresh action sends `forceRefresh`, which bypasses both caches once they
+are thirty seconds old; inside that floor it is served from the cache, so repeated presses
+cannot run into provider rate limits. The poll never forces. Daemons without the flag
+ignore it and serve cached usage.
 Account windows display remaining allowance and the duration returned by the provider, with an update
-age. A failed refresh identifies retained data rather than presenting it as fresh.
+age. A failed refresh identifies retained data rather than presenting it as fresh: when a
+provider fetch fails (network error, rate limit, timeout), the daemon keeps that provider's
+last successful entry with its own `fetchedAt` and an `error` naming the failure, so
+freshness checks treat it as stale instead of replacing it with an empty error entry.
 The request and response fields are optional: older clients retain their ordinary
 provider card, and hosts without a router keep their existing single-account view.
 An account's percentage is never added to another account's percentage.
@@ -49,8 +55,13 @@ account; a `model` window limits one model (Claude's `Weekly · <model>`) and a
 `surface` window limits one feature (Codex code review and its named additional
 limits). The account `allowance` reads general windows only: a spent or
 unreported scoped window neither exhausts the account nor makes it unknown. Each
-scoped window's own allowance is listed in `scoped`. An account that reports only
-scoped windows stays unknown. Scope is derived from window ids in
+scoped window's own allowance, percentage and reset are listed in `scoped`. When
+general windows remain but a scoped window is spent, the reason is
+`general_remaining_scoped_exhausted`. Pass the planned model (`get_usage`'s `model`) to
+fold that model's own windows into the account allowance: a spent Claude
+`Weekly · Sonnet` window then makes the account `exhausted` for Sonnet work, and a
+missing value there makes it `unknown`. An account that reports only scoped windows
+stays unknown. Scope is derived from window ids in
 `packages/protocol/src/usage-summary.ts`; a new usage source's scoped windows need
 an entry there.
 
@@ -60,6 +71,10 @@ worker observation does not prove that an old process adopted a live pause.
 Every new agent, whether created from the app, `paseo run`, or an agent's
 `create_agent` tool, records the selected provider/model and pre-inference usage
 snapshot in `resource-decisions/decisions.jsonl` under the owning daemon home.
+The `dispatch` row is written before the initial prompt runs, with `observationState:
+"pending"`, so every later state transition has a base. Usage discovery does not block
+creation: its result follows as a separate `observation` row, folded with the agent's
+model, or `unavailable` with `unavailableReason` `error` or `timeout` (twenty seconds).
 The snapshot reads the same enabled usage sources as the usage RPC.
 Supply `paseo.resource-reason` as an agent label to retain the reason; otherwise
 it records explicit requested configuration, not an inferred optimization.

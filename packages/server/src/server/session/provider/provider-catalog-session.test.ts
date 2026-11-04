@@ -324,11 +324,13 @@ describe("ProviderCatalogSession", () => {
     );
   });
 
-  it("forceRefresh bypasses the provider usage cache; plain requests reuse it", async () => {
+  it("forceRefresh bypasses a cache older than 30 s; plain requests reuse it", async () => {
     let calls = 0;
+    let now = Date.parse("2026-11-04T00:00:00.000Z");
     const service = new ProviderUsageService({
       usageSources: { isEnabled: () => true },
       logger: pino({ level: "silent" }),
+      now: () => now,
       fetchers: [
         {
           providerId: "claude",
@@ -364,11 +366,17 @@ describe("ProviderCatalogSession", () => {
     });
     await subsystem.handleProviderUsageListRequest({
       type: "provider.usage.list.request",
+      requestId: "early-refresh",
+      forceRefresh: true,
+    });
+    now += 30_000;
+    await subsystem.handleProviderUsageListRequest({
+      type: "provider.usage.list.request",
       requestId: "refresh",
       forceRefresh: true,
     });
 
-    expect(usedPct()).toEqual([1, 1, 2]);
+    expect(usedPct()).toEqual([1, 1, 1, 2]);
     expect(calls).toBe(2);
   });
 
