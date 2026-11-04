@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { summarizeUsage, windowScope } from "./usage-summary.js";
+import { summarizeUsage, windowLimitsModel, windowScope } from "./usage-summary.js";
 const now = Date.parse("2026-10-31T00:00:00Z");
 const source = {
   providerId: "codex",
@@ -22,7 +22,7 @@ it("keeps exhausted and missing account windows separate from aggregate capacity
         },
       ],
     },
-    now,
+    { now },
   );
   expect(result.resources.map((r) => r.allowance)).toEqual(["exhausted", "unknown"]);
   expect(result.resources.map((r) => r.executionAdmission)).toEqual([
@@ -33,12 +33,12 @@ it("keeps exhausted and missing account windows separate from aggregate capacity
 it("does not present stale, future, elapsed-reset or unavailable data as capacity", () => {
   const old = summarizeUsage(
     { fetchedAt: new Date(now - 301000).toISOString(), providers: [source] },
-    now,
+    { now },
   );
   expect(old.resources[0]?.reason).toBe("stale_or_invalid_timestamp");
   const future = summarizeUsage(
     { fetchedAt: new Date(now + 1).toISOString(), providers: [source] },
-    now,
+    { now },
   );
   expect(future.resources[0]?.allowance).toBe("unknown");
   const reset = summarizeUsage(
@@ -53,7 +53,7 @@ it("does not present stale, future, elapsed-reset or unavailable data as capacit
         },
       ],
     },
-    now,
+    { now },
   );
   expect(reset.resources[0]?.allowance).toBe("unknown");
 });
@@ -70,7 +70,7 @@ it("strips raw error and detail strings from planning output", () => {
         },
       ],
     },
-    now,
+    { now },
   );
   expect(JSON.stringify(r)).not.toContain("secret");
   expect(r.resources[0]?.allowance).toBe("unknown");
@@ -79,7 +79,7 @@ it("strips raw error and detail strings from planning output", () => {
 it("does not fall back to aggregate quota when routed account discovery fails", () => {
   const r = summarizeUsage(
     { fetchedAt: new Date(now).toISOString(), providers: [{ ...source, accounts: [] }] },
-    now,
+    { now },
   );
   expect(r.resources[0]?.allowance).toBe("unknown");
 });
@@ -114,12 +114,20 @@ it("does not let a Codex code review window without a percent make the account u
         },
       ],
     },
-    now,
+    { now },
   );
   expect(r.resources[0]?.allowance).toBe("remaining");
   expect(r.resources[0]?.reason).toBe("all_reported_windows_positive");
   expect(r.resources[0]?.scoped).toEqual([
-    { id: "code_review", label: "Code review", scope: "surface", allowance: "unknown" },
+    {
+      id: "code_review",
+      label: "Code review",
+      scope: "surface",
+      allowance: "unknown",
+      remainingPct: null,
+      resetsAt: null,
+      appliesToModel: false,
+    },
   ]);
 });
 
@@ -140,10 +148,11 @@ it("reports an exhausted per-model window separately from general admission", ()
         },
       ],
     },
-    now,
+    { now },
   );
   const resource = r.resources[0];
   expect(resource?.allowance).toBe("remaining");
+  expect(resource?.reason).toBe("general_remaining_scoped_exhausted");
   expect(resource?.scoped.map((w) => [w.id, w.scope, w.allowance])).toEqual([
     ["seven_day_opus", "model", "exhausted"],
     ["weekly_model_fable", "model", "exhausted"],
@@ -165,7 +174,7 @@ it("still refuses general admission when a general window is exhausted or missin
         },
       ],
     },
-    now,
+    { now },
   );
   expect(exhausted.resources[0]?.allowance).toBe("exhausted");
   const missing = summarizeUsage(
@@ -181,7 +190,7 @@ it("still refuses general admission when a general window is exhausted or missin
         },
       ],
     },
-    now,
+    { now },
   );
   expect(missing.resources[0]?.allowance).toBe("unknown");
 });
@@ -194,9 +203,83 @@ it("keeps allowance unknown when only scoped windows are reported", () => {
         { ...source, windows: [{ id: "code_review", label: "Code review", remainingPct: 90 }] },
       ],
     },
-    now,
+    { now },
   );
   expect(r.resources[0]?.allowance).toBe("unknown");
   expect(r.resources[0]?.reason).toBe("missing_or_invalid_windows");
   expect(r.resources[0]?.scoped[0]?.allowance).toBe("remaining");
+});
+
+function claudeWithSonnetSpent() {
+  return {
+    fetchedAt: fresh,
+    providers: [
+      {
+        ...source,
+        providerId: "claude",
+        windows: [
+          { id: "five_hour", label: "Session", remainingPct: 90, resetsAt: reset },
+          { id: "weekly", label: "Weekly", remainingPct: 60, resetsAt: reset },
+          { id: "weekly_model_sonnet", label: "Weekly · Sonnet", remainingPct: 0, resetsAt: reset },
+        ],
+      },
+    ],
+  };
+}
+
+it("flags general admission that remains while a scoped window is spent", () => {
+  const r = summarizeUsage(claudeWithSonnetSpent(), { now });
+  expect(r.model).toBeNull();
+  expect(r.resources[0]?.allowance).toBe("remaining");
+  expect(r.resources[0]?.reason).toBe("general_remaining_scoped_exhausted");
+  expect(r.resources[0]?.scoped).toEqual([
+    {
+      id: "weekly_model_sonnet",
+      label: "Weekly · Sonnet",
+      scope: "model",
+      allowance: "exhausted",
+      remainingPct: 0,
+      resetsAt: reset,
+      appliesToModel: false,
+    },
+  ]);
+});
+
+it("folds the requested model's window into the account allowance", () => {
+  const sonnet = summarizeUsage(claudeWithSonnetSpent(), { now, model: "claude-sonnet-5-5" });
+  expect(sonnet.model).toBe("claude-sonnet-5-5");
+  expect(sonnet.resources[0]?.allowance).toBe("exhausted");
+  expect(sonnet.resources[0]?.reason).toBe("window_exhausted");
+  expect(sonnet.resources[0]?.scoped[0]?.appliesToModel).toBe(true);
+
+  const opus = summarizeUsage(claudeWithSonnetSpent(), { now, model: "claude-opus-5-5" });
+  expect(opus.resources[0]?.allowance).toBe("remaining");
+  expect(opus.resources[0]?.reason).toBe("general_remaining_scoped_exhausted");
+});
+
+it("makes the allowance unknown when the requested model's window has no value", () => {
+  const usage = claudeWithSonnetSpent();
+  usage.providers[0]!.windows[2] = {
+    id: "weekly_model_sonnet",
+    label: "Weekly · Sonnet",
+    remainingPct: null as unknown as number,
+    resetsAt: reset,
+  };
+  expect(summarizeUsage(usage, { now, model: "sonnet" }).resources[0]?.allowance).toBe("unknown");
+  expect(summarizeUsage(usage, { now }).resources[0]?.allowance).toBe("remaining");
+});
+
+it("matches model windows by id key or legacy label", () => {
+  expect(windowLimitsModel({ id: "weekly_model_sonnet", label: "x" }, "sonnet")).toBe(true);
+  expect(
+    windowLimitsModel({ id: "seven_day_opus", label: "Weekly - Opus" }, "claude-opus-5-5"),
+  ).toBe(true);
+  expect(windowLimitsModel({ id: "weekly_model_opus", label: "x" }, "claude-sonnet-5-5")).toBe(
+    false,
+  );
+  expect(windowLimitsModel({ id: "weekly_surface_code", label: "Weekly · Code" }, "code")).toBe(
+    false,
+  );
+  expect(windowLimitsModel({ id: "weekly", label: "Weekly" }, "sonnet")).toBe(false);
+  expect(windowLimitsModel({ id: "weekly_model_sonnet", label: "x" }, null)).toBe(false);
 });

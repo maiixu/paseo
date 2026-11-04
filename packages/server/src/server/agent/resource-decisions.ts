@@ -5,6 +5,10 @@ import type { ManagedAgent } from "./agent-manager.js";
 import type { ProviderUsageListResult } from "../../services/quota-fetcher/service.js";
 import { summarizeUsage } from "@getpaseo/protocol/usage-summary";
 
+export type ResourceObservation =
+  | { usage: ProviderUsageListResult }
+  | { unavailable: "error" | "timeout" };
+
 /** Metadata-only audit trail. Never serializes prompts, config, auth, tool input or errors. */
 export class ResourceDecisions {
   private readonly states = new Map<string, string>();
@@ -45,7 +49,11 @@ export class ResourceDecisions {
     });
     chmodSync(this.file, 0o600);
   }
-  record(agent: ManagedAgent, usage: ProviderUsageListResult | null) {
+  /**
+   * Journal the selected configuration and seed the agent's state. Synchronous so it lands
+   * before the initial prompt can move the agent out of its created lifecycle.
+   */
+  dispatch(agent: ManagedAgent) {
     this.append({
       event: "dispatch",
       agentId: agent.id,
@@ -55,10 +63,23 @@ export class ResourceDecisions {
       effort: agent.config.thinkingOptionId,
       parentAgentId: agent.labels["paseo.parent-agent-id"] ?? null,
       reason: agent.labels["paseo.resource-reason"] ?? "explicit_requested_configuration",
-      observation: usage ? summarizeUsage(usage) : null,
-      observationState: usage ? "observed" : "unavailable",
+      observationState: "pending",
     });
     this.states.set(agent.id, agent.lifecycle);
+  }
+  /** The pre-inference usage observation for a dispatch, appended once discovery settles. */
+  observation(input: { agentId: string; model: string | null; result: ResourceObservation }) {
+    const { result } = input;
+    this.append({
+      event: "observation",
+      agentId: input.agentId,
+      ...("usage" in result
+        ? {
+            observationState: "observed",
+            observation: summarizeUsage(result.usage, { model: input.model }),
+          }
+        : { observationState: "unavailable", unavailableReason: result.unavailable }),
+    });
   }
   observe(agent: ManagedAgent) {
     const previous = this.states.get(agent.id);
@@ -71,4 +92,49 @@ export class ResourceDecisions {
     });
     this.states.set(agent.id, agent.lifecycle);
   }
+}
+
+export const RESOURCE_OBSERVATION_TIMEOUT_MS = 20_000;
+
+/**
+ * Build the create-path receipt: the dispatch row is written synchronously, and the usage
+ * observation follows as its own row without blocking creation. Discovery that fails or
+ * outlasts the timeout is recorded as unavailable; it is never a prerequisite for the task.
+ */
+export function createResourceDecisionRecorder(options: {
+  decisions: ResourceDecisions | null;
+  getUsage: (agentId: string) => Promise<ProviderUsageListResult | null | undefined>;
+  logger: Logger;
+  timeoutMs?: number;
+}): (agent: ManagedAgent) => void {
+  const { decisions, logger } = options;
+  const timeoutMs = options.timeoutMs ?? RESOURCE_OBSERVATION_TIMEOUT_MS;
+  async function observe(agent: ManagedAgent, journal: ResourceDecisions): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<ResourceObservation>((resolve) => {
+      timer = setTimeout(() => resolve({ unavailable: "timeout" }), timeoutMs);
+      timer.unref?.();
+    });
+    const discovery = (async (): Promise<ResourceObservation> => {
+      try {
+        const usage = await options.getUsage(agent.id);
+        return usage ? { usage } : { unavailable: "error" };
+      } catch {
+        return { unavailable: "error" };
+      }
+    })();
+    try {
+      const result = await Promise.race([discovery, timeout]);
+      journal.observation({ agentId: agent.id, model: agent.config.model ?? null, result });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return (agent) => {
+    if (!decisions) return;
+    decisions.dispatch(agent);
+    observe(agent, decisions).catch((error: unknown) => {
+      logger.warn({ err: error, agentId: agent.id }, "Resource observation could not be saved");
+    });
+  };
 }

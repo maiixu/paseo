@@ -6,6 +6,7 @@ import type { Logger } from "pino";
 import type { ProviderUsageListResponseMessage } from "../../server/messages.js";
 import { CodexQuotaProvider } from "./providers/codex.js";
 import type { ProviderApiFetch } from "./provider.js";
+import { MIN_FORCED_REFRESH_INTERVAL_MS } from "./usage.js";
 
 type Payload = ProviderUsageListResponseMessage["payload"];
 type Routing = NonNullable<Payload["accountRouting"]>;
@@ -124,7 +125,11 @@ export class AccountRouterUsage {
   ): Promise<Accounts> {
     const key = JSON.stringify(config);
     let accounts: Accounts;
-    if (!forceRefresh && this.cache?.key === key && now - this.cache.at < 60_000)
+    const cacheAgeMs = this.cache?.key === key ? now - this.cache.at : null;
+    // A forced refresh inside the floor is served from the cache, like provider usage.
+    const forced =
+      forceRefresh && (cacheAgeMs === null || cacheAgeMs >= MIN_FORCED_REFRESH_INTERVAL_MS);
+    if (this.cache && cacheAgeMs !== null && !forced && cacheAgeMs < 60_000)
       accounts = this.cache.accounts;
     else {
       if (!this.inFlight || this.inFlight.key !== key) {

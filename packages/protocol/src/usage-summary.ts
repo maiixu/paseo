@@ -52,7 +52,44 @@ function windowAllowance(
   return remaining === 0 ? "exhausted" : "remaining";
 }
 
-export function summarizeUsage(usage: Usage, now = Date.now()) {
+function tokens(value: string): string[] {
+  return value
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
+/**
+ * Whether a model-scoped window limits the given model. The window's model key comes from
+ * its id (`weekly_model_<key>`) or, for older fetchers, its label (`Weekly · <name>`); it
+ * matches when every key token appears in the model id, so `weekly_model_sonnet` limits
+ * `claude-sonnet-5-5` and `sonnet`, but not `claude-opus-5-5`.
+ */
+export function windowLimitsModel(
+  window: Pick<UsageWindow, "id" | "label">,
+  model: string | null | undefined,
+): boolean {
+  if (!model || windowScope(window) !== "model") return false;
+  const key = MODEL_ID.test(window.id)
+    ? window.id.replace(MODEL_ID, "")
+    : window.label.replace(/^weekly\s*[-·:]\s*/i, "");
+  const keyTokens = tokens(key);
+  const modelTokens = new Set(tokens(model));
+  return keyTokens.length > 0 && keyTokens.every((token) => modelTokens.has(token));
+}
+
+export interface SummarizeUsageOptions {
+  now?: number;
+  /**
+   * The model the planned work runs on. Its matching model-scoped windows join the general
+   * windows in the account allowance; other scoped windows stay informational.
+   */
+  model?: string | null;
+}
+
+export function summarizeUsage(usage: Usage, options: SummarizeUsageOptions = {}) {
+  const now = options.now ?? Date.now();
+  const model = options.model ?? null;
   const resources = usage.providers.flatMap((provider) => {
     // Empty account windows must not inherit the aggregate provider allowance.
     const accounts = [...(provider.accounts ?? [provider])];
@@ -78,21 +115,35 @@ export function summarizeUsage(usage: Usage, now = Date.now()) {
           ...base,
         };
       });
-      // General admission reads general windows only. A spent code-review or per-model
-      // window does not refuse ordinary work, and a missing value there does not make the
-      // account unknown; those windows are reported in `scoped` instead.
-      const general = windows.filter((w) => w.scope === "general");
+      // Admission reads general windows, plus the model windows of the requested model. A
+      // spent code-review or other-model window does not refuse ordinary work, and a missing
+      // value there does not make the account unknown; those are reported in `scoped`.
+      const admission = windows.filter((w) => w.scope === "general" || windowLimitsModel(w, model));
       const scoped = windows
         .filter((w) => w.scope !== "general")
-        .map((w) => ({ id: w.id, label: w.label, scope: w.scope, allowance: w.allowance }));
+        .map((w) => ({
+          id: w.id,
+          label: w.label,
+          scope: w.scope,
+          allowance: w.allowance,
+          remainingPct: w.remainingPct,
+          resetsAt: w.resetsAt,
+          appliesToModel: windowLimitsModel(w, model),
+        }));
       let allowance: UsageAllowance = "unknown";
       let reason = "missing_or_invalid_windows";
       if (!fresh) reason = "stale_or_invalid_timestamp";
       else if (account.status !== "available") reason = "observation_unavailable";
-      else if (general.length > 0 && general.every((w) => w.allowance !== "unknown")) {
-        const exhausted = general.some((w) => w.allowance === "exhausted");
+      else if (
+        admission.some((w) => w.scope === "general") &&
+        admission.every((w) => w.allowance !== "unknown")
+      ) {
+        const exhausted = admission.some((w) => w.allowance === "exhausted");
         allowance = exhausted ? "exhausted" : "remaining";
-        reason = exhausted ? "window_exhausted" : "all_reported_windows_positive";
+        if (exhausted) reason = "window_exhausted";
+        else if (scoped.some((w) => !w.appliesToModel && w.allowance === "exhausted"))
+          reason = "general_remaining_scoped_exhausted";
+        else reason = "all_reported_windows_positive";
       }
       return {
         provider: provider.providerId,
@@ -109,6 +160,7 @@ export function summarizeUsage(usage: Usage, now = Date.now()) {
   });
   return {
     observedAt: new Date(now).toISOString(),
+    model,
     routing: usage.accountRouting ?? null,
     resources,
   };

@@ -3011,13 +3011,16 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     {
       title: "Read resource usage",
       description:
-        "Read per-account quota windows, reset times, observation freshness and current route. Defaults to this conversation. Read-only: does not run inference, choose a model, change accounts or authorize spending. Unknown and exhausted are distinct.",
-      inputSchema: { agentId: z.string().optional() },
+        "Read per-account quota windows, reset times, observation freshness and current route. Defaults to this conversation. Account allowance reads general windows; pass `model` (the model the planned work runs on) to also count that model's own windows, such as Claude's per-model weekly limit. Without `model`, reason `general_remaining_scoped_exhausted` means a per-model or feature window in `scoped` is spent. Read-only: does not run inference, choose a model, change accounts or authorize spending. Unknown and exhausted are distinct.",
+      inputSchema: { agentId: z.string().optional(), model: z.string().optional() },
     },
-    async ({ agentId }) => {
+    async ({ agentId, model }) => {
       if (!options.getResourceUsage) throw new Error("Resource usage is unavailable on this host");
       const result = await options.getResourceUsage(agentId ?? callerAgentId);
-      return { content: [], structuredContent: ensureValidJson(summarizeUsage(result)) };
+      return {
+        content: [],
+        structuredContent: ensureValidJson(summarizeUsage(result, { model: model ?? null })),
+      };
     },
   );
 
