@@ -36,7 +36,11 @@ export interface CreateAgentSessionWorktreeResult {
 }
 
 export interface CreateAgentCommandDependencies {
-  recordResourceDecision?: (agent: ManagedAgent) => Promise<void>;
+  /**
+   * Journals the dispatch synchronously; any usage observation it starts must not block.
+   * Called before the initial prompt so later state transitions have a base to diff against.
+   */
+  recordResourceDecision?: (agent: ManagedAgent) => void;
   agentManager: AgentManager;
   agentStorage: AgentStorage;
   logger: Logger;
@@ -188,18 +192,15 @@ export async function createAgentCommand(
     resolved.createOptions,
   );
 
-  // Record the selected configuration without blocking creation: the receipt may wait on
-  // provider usage discovery. Failure is logged and never replays creation.
-  const recordResourceDecision = dependencies.recordResourceDecision;
-  if (recordResourceDecision) {
-    void Promise.resolve()
-      .then(() => recordResourceDecision(snapshot))
-      .catch(() => {
-        dependencies.logger.warn(
-          { agentId: snapshot.id },
-          "Resource decision receipt could not be saved",
-        );
-      });
+  // Journal the dispatch before the initial prompt can change the lifecycle. The usage
+  // observation follows on its own. Failure is logged and never replays creation.
+  try {
+    dependencies.recordResourceDecision?.(snapshot);
+  } catch {
+    dependencies.logger.warn(
+      { agentId: snapshot.id },
+      "Resource decision receipt could not be saved",
+    );
   }
 
   resolved.setupContinuation?.startAfterAgentCreate({

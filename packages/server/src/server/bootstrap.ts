@@ -1,4 +1,4 @@
-import { ResourceDecisions } from "./agent/resource-decisions.js";
+import { ResourceDecisions, createResourceDecisionRecorder } from "./agent/resource-decisions.js";
 import type { PluginRegistries } from "@getpaseo/protocol/plugin-registry";
 import { describeHookWorkspace } from "./plugins/lifecycle/index.js";
 import express from "express";
@@ -1200,17 +1200,13 @@ export async function createPaseoDaemon(
     },
     { replayState: false },
   );
-  const recordResourceDecision: CreateAgentCommandDependencies["recordResourceDecision"] = async (
-    agent,
-  ) => {
-    let usage = null;
-    try {
-      usage = (await wsServer?.getResourceUsage(agent.id)) ?? null;
-    } catch {
-      /* Discovery is evidence, never a prerequisite for the authorized task. */
-    }
-    resourceDecisions?.record(agent, usage);
-  };
+  const recordResourceDecision: CreateAgentCommandDependencies["recordResourceDecision"] =
+    createResourceDecisionRecorder({
+      decisions: resourceDecisions,
+      // Discovery is evidence, never a prerequisite for the authorized task.
+      getUsage: async (agentId) => (await wsServer?.getResourceUsage(agentId)) ?? null,
+      logger,
+    });
 
   const createAgentCommandDependencies: CreateAgentCommandDependencies = {
     recordResourceDecision,

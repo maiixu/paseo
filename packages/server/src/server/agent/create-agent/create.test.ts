@@ -97,7 +97,7 @@ test("session create forwards clientMessageId to the initial prompt run options"
 
 function createRecordingTestDependencies(
   snapshot: ManagedAgent,
-  recordResourceDecision: (agent: ManagedAgent) => Promise<void>,
+  recordResourceDecision: (agent: ManagedAgent) => void,
 ) {
   const streamAgent = vi.fn(() => (async function* noop() {})());
   const onAgentReady = vi.fn(async () => {});
@@ -151,6 +151,27 @@ test("session create does not wait for a never-resolving resource decision recei
   expect(recordResourceDecision).toHaveBeenCalledWith(snapshot);
   expect(onAgentReady).toHaveBeenCalledWith(snapshot);
   expect(streamAgent).toHaveBeenCalledTimes(1);
+});
+
+test("session create journals the dispatch before the initial prompt runs", async () => {
+  const snapshot = {
+    id: "agent-1",
+    provider: "codex",
+    cwd: "/tmp/paseo-create-test",
+    runtimeInfo: null,
+  } as ManagedAgent;
+  const recordResourceDecision = vi.fn(() => {});
+  const { dependencies, input, streamAgent } = createRecordingTestDependencies(
+    snapshot,
+    recordResourceDecision,
+  );
+
+  await createAgentCommand(dependencies, input);
+
+  expect(recordResourceDecision).toHaveBeenCalledWith(snapshot);
+  expect(recordResourceDecision.mock.invocationCallOrder[0]).toBeLessThan(
+    streamAgent.mock.invocationCallOrder[0]!,
+  );
 });
 
 test("session create survives a failing resource decision receipt without replaying creation", async () => {
