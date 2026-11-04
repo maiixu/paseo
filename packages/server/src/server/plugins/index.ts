@@ -168,6 +168,10 @@ export class PluginService {
     return this.usageSources.listLegacyUsage();
   }
 
+  isUsageSourceEnabled(sourceId: string): boolean {
+    return this.usageSources.has(sourceId);
+  }
+
   subscribeProviderRegistrations(listener: () => void): () => void {
     this.providerListeners.add(listener);
     return () => this.providerListeners.delete(listener);

@@ -71,6 +71,11 @@ export class UsageSourceRegistry {
     this.sources.set(source.id, source);
   }
 
+  /** Whether a usage source with this ID is registered by a running plugin. */
+  has(id: string): boolean {
+    return this.sources.has(id);
+  }
+
   unregister(id: string): void {
     this.sources.delete(id);
     for (const key of this.defaults.keys()) if (key.startsWith(`${id}:`)) this.defaults.delete(key);

@@ -760,6 +760,11 @@ export class VoiceAssistantWebSocketServer {
 
     this.providerUsageService = new ProviderUsageService({
       logger: this.logger,
+      // A usage source the plugin runtime has not registered is disabled: its fetcher is
+      // skipped before any credential read or network call.
+      usageSources: {
+        isEnabled: (sourceId) => this.pluginRuntime?.isUsageSourceEnabled(sourceId) ?? false,
+      },
       accountRouter: {
         logger: this.logger,
         getCommand: () => this.daemonConfigStore.get().providers?.codex?.command,
