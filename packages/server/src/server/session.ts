@@ -523,6 +523,7 @@ export interface SessionOptions {
       reportIds?: string[];
     }): Promise<UsageReportEntry[]>;
     listLegacyUsage(): Promise<{ fetchedAt: string; providers: ProviderUsage[] }>;
+    isUsageSourceEnabled(sourceId: string): boolean;
   };
   orchestrationSkills?: import("./orchestration-skills/index.js").OrchestrationSkills;
   mcpBaseUrl?: string | null;

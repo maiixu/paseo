@@ -14,7 +14,13 @@ import { GrokQuotaProvider } from "./providers/grok.js";
 import { KimiQuotaProvider } from "./providers/kimi.js";
 import { MiniMaxQuotaProvider } from "./providers/minimax.js";
 import { ZaiQuotaProvider } from "./providers/zai.js";
-import { ProviderUsageService } from "./service.js";
+import { ProviderUsageService, type UsageSourceEnablement } from "./service.js";
+
+const allUsageSourcesEnabled: UsageSourceEnablement = { isEnabled: () => true };
+
+function onlyUsageSources(...ids: string[]): UsageSourceEnablement {
+  return { isEnabled: (sourceId) => ids.includes(sourceId) };
+}
 
 function writeClaudeCredentials(
   dir: string,
@@ -185,6 +191,7 @@ function findProvider(result: { providers: ProviderUsage[] }, providerId: string
 describe("ProviderUsageService", () => {
   it("returns arbitrary registered providers and windows as normalized usage data", async () => {
     const service = new ProviderUsageService({
+      usageSources: allUsageSourcesEnabled,
       logger: createLogger(),
       now: () => Date.parse("2026-06-19T00:00:00.000Z"),
       fetchers: [
@@ -228,10 +235,133 @@ describe("ProviderUsageService", () => {
     });
   });
 
+  it("never invokes the fetcher of a disabled usage source", async () => {
+    const claudeFetch = vi.fn(async () => {
+      throw new Error("disabled source was fetched");
+    });
+    const cursorFetch = vi.fn(async () => {
+      throw new Error("disabled source was fetched");
+    });
+    const codex = usageFetcher({
+      providerId: "codex",
+      displayName: "Codex",
+      status: "available",
+      planLabel: null,
+      windows: [],
+    });
+    const service = new ProviderUsageService({
+      usageSources: onlyUsageSources("codex"),
+      logger: createLogger(),
+      fetchers: [
+        { providerId: "claude", displayName: "Claude", fetchUsage: claudeFetch },
+        { providerId: "cursor", displayName: "Cursor", fetchUsage: cursorFetch },
+        codex,
+      ],
+    });
+
+    const result = await service.listUsage({ forceRefresh: true });
+
+    expect(claudeFetch).not.toHaveBeenCalled();
+    expect(cursorFetch).not.toHaveBeenCalled();
+    expect(result.providers.map((provider) => provider.providerId)).toEqual(["codex"]);
+  });
+
+  it("reports Codex router accounts even when the codex usage source is disabled", async () => {
+    const root = mkdtempSync(join(tmpdir(), "usage-test-router-"));
+    try {
+      mkdirSync(join(root, "plus"));
+      writeCodexAuth(join(root, "plus"), "plus");
+      writeFileSync(
+        join(root, "router.json"),
+        JSON.stringify({
+          stateDirectory: root,
+          legacyAccount: "plus",
+          accounts: [{ alias: "plus", home: join(root, "plus") }],
+        }),
+      );
+      const ambientCodex = vi.fn(async () => {
+        throw new Error("disabled source was fetched");
+      });
+      const routerFetch = vi.fn(async () =>
+        jsonResponse({
+          plan_type: "plus",
+          rate_limit: {
+            primary_window: { used_percent: 20, limit_window_seconds: 18000, reset_at: 1_800_000 },
+          },
+        }),
+      );
+      const service = new ProviderUsageService({
+        usageSources: onlyUsageSources(),
+        logger: createLogger(),
+        fetchers: [{ providerId: "codex", displayName: "Codex", fetchUsage: ambientCodex }],
+        accountRouter: {
+          logger: createLogger(),
+          getCommand: () => [
+            "python3",
+            "/release/paseo-codex-router.py",
+            "--router-config",
+            join(root, "router.json"),
+          ],
+          getAgent: () => null,
+          fetch: routerFetch as never,
+        },
+      });
+
+      const result = await service.listUsage();
+
+      expect(ambientCodex).not.toHaveBeenCalled();
+      expect(routerFetch).toHaveBeenCalledTimes(1);
+      const codex = findProvider(result, "codex");
+      expect(codex.accounts?.map((account) => account.accountId)).toEqual(["plus"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("drops a cached provider once its usage source is disabled and fetches it once enabled", async () => {
+    const enabled = new Set(["claude", "codex"]);
+    const claudeFetch = vi.fn(async () => ({
+      providerId: "claude",
+      displayName: "Claude",
+      status: "available" as const,
+      planLabel: null,
+      windows: [],
+    }));
+    const service = new ProviderUsageService({
+      usageSources: { isEnabled: (sourceId) => enabled.has(sourceId) },
+      logger: createLogger(),
+      cacheTtlMs: 60_000,
+      fetchers: [
+        { providerId: "claude", displayName: "Claude", fetchUsage: claudeFetch },
+        usageFetcher({
+          providerId: "codex",
+          displayName: "Codex",
+          status: "available",
+          planLabel: null,
+          windows: [],
+        }),
+      ],
+    });
+
+    await service.listUsage();
+    expect(claudeFetch).toHaveBeenCalledTimes(1);
+
+    enabled.delete("claude");
+    const disabled = await service.listUsage();
+    expect(disabled.providers.map((provider) => provider.providerId)).toEqual(["codex"]);
+    expect(claudeFetch).toHaveBeenCalledTimes(1);
+
+    enabled.add("claude");
+    const reenabled = await service.listUsage();
+    expect(reenabled.providers.map((provider) => provider.providerId)).toEqual(["claude", "codex"]);
+    expect(claudeFetch).toHaveBeenCalledTimes(2);
+  });
+
   it("caches usage until forced to refresh", async () => {
     let now = Date.parse("2026-06-19T00:00:00.000Z");
     let calls = 0;
     const service = new ProviderUsageService({
+      usageSources: allUsageSourcesEnabled,
       logger: createLogger(),
       now: () => now,
       cacheTtlMs: 60_000,
@@ -267,6 +397,7 @@ describe("ProviderUsageService", () => {
     let calls = 0;
     let resolveUsage: ((usage: ProviderUsage) => void) | null = null;
     const service = new ProviderUsageService({
+      usageSources: allUsageSourcesEnabled,
       logger: createLogger(),
       now: () => Date.parse("2026-06-19T00:00:00.000Z"),
       fetchers: [
@@ -302,6 +433,7 @@ describe("ProviderUsageService", () => {
 
   it("isolates one provider error without dropping other providers", async () => {
     const service = new ProviderUsageService({
+      usageSources: allUsageSourcesEnabled,
       logger: createLogger(),
       now: () => Date.parse("2026-06-19T00:00:00.000Z"),
       fetchers: [
@@ -406,12 +538,14 @@ describe("real provider usage fetchers", () => {
       cursorHomeDir?: string;
       miniMaxConfigPath?: string;
       miniMaxCredentialsPath?: string;
+      usageSources?: UsageSourceEnablement;
     } = {},
   ) {
     const logger = createLogger();
     const fetchThroughTestDouble = ((url: RequestInfo | URL, init?: RequestInit) =>
       fetchApi(url, init)) as typeof fetch;
     return new ProviderUsageService({
+      usageSources: options.usageSources ?? allUsageSourcesEnabled,
       logger,
       now: () => Date.parse("2026-06-19T00:00:00.000Z"),
       fetchers: [
@@ -455,6 +589,71 @@ describe("real provider usage fetchers", () => {
       cacheTtlMs: 0,
     });
   }
+
+  it("reads no credentials and calls no API for disabled usage sources", async () => {
+    writeClaudeCredentials(claudeHome, "at_claude");
+    writeCodexAuth(codexHome, "at_codex");
+    writeKimiCredentials(homeDir, "at_kimi");
+    process.env["COPILOT_TOKEN"] = "copilot";
+    process.env["CURSOR_ACCESS_TOKEN"] = "cursor";
+    process.env["ZAI_API_KEY"] = "zai";
+    process.env["GROK_API_KEY"] = "grok";
+    process.env["KIMI_TOKEN"] = "kimi";
+    process.env["MINIMAX_API_KEY"] = "minimax";
+    const keychain = vi.fn(async () => ({ claudeAiOauth: { accessToken: "at_keychain" } }));
+    fetchApi = vi.fn(async () => {
+      throw new Error("disabled usage source reached the network");
+    }) as never;
+
+    const result = await service({
+      platform: "darwin",
+      keychain,
+      usageSources: onlyUsageSources(),
+    }).listUsage();
+
+    expect(result.providers).toEqual([]);
+    expect(keychain).not.toHaveBeenCalled();
+    expect(fetchApi).not.toHaveBeenCalled();
+  });
+
+  it("keeps the Claude usage contract when only the Claude usage source is enabled", async () => {
+    writeClaudeCredentials(claudeHome, "at_valid", "rt_test", "max", "default_5x");
+    process.env["COPILOT_TOKEN"] = "copilot";
+    process.env["ZAI_API_KEY"] = "zai";
+    fetchApi = mockFetch(
+      new Map([
+        [
+          "https://api.anthropic.com/api/oauth/usage",
+          () =>
+            jsonResponse({
+              ...makeClaudeResponse(),
+              extra_usage: { is_enabled: true },
+            }),
+        ],
+      ]),
+    );
+
+    const result = await service({ usageSources: onlyUsageSources("claude") }).listUsage();
+
+    // maiixu/intelligence scripts/paseo-steward-rpc.mjs (mode claude-usage) reads exactly this.
+    expect(result.providers.map((provider) => provider.providerId)).toEqual(["claude"]);
+    const claude = findProvider(result, "claude");
+    expect(claude.status).toBe("available");
+    expect(claude.windows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "five_hour", usedPct: 11, resetsAt: "2026-06-01T21:00:00Z" }),
+        expect.objectContaining({ id: "weekly", usedPct: 1, resetsAt: "2026-06-04T00:00:00Z" }),
+      ]),
+    );
+    expect(claude.details).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "extra_usage", value: "Enabled" })]),
+    );
+    expect(fetchApi).toHaveBeenCalledTimes(1);
+    expect(fetchApi).toHaveBeenCalledWith(
+      "https://api.anthropic.com/api/oauth/usage",
+      expect.anything(),
+    );
+  });
 
   it("fetches Claude usage, coerces API numbers, and attaches HTTP timeout signals", async () => {
     writeClaudeCredentials(claudeHome, "at_valid");

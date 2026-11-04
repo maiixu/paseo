@@ -24,9 +24,12 @@ const schema: OutputSchema<Summary> = {
       lines.push(`${r.provider}/${r.account ?? "default"}: ${r.allowance} (${r.reason})`);
       for (const w of r.windows)
         lines.push(
-          `  ${w.label}: ${w.remainingPct ?? "?"}% remaining; reset ${w.resetsAt ?? "unknown"}`,
+          `  ${w.label}${w.scope === "general" ? "" : ` [${w.scope}]`}: ${w.remainingPct ?? "?"}% remaining; reset ${w.resetsAt ?? "unknown"}`,
         );
     }
+    lines.push(
+      "Account allowance reads general windows only; [model]/[surface] windows are reported separately.",
+    );
     lines.push("Allowance is not authorization or execution admission; windows are not pooled.");
     return lines.join("\n");
   },

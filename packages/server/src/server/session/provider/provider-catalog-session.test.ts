@@ -327,6 +327,7 @@ describe("ProviderCatalogSession", () => {
   it("forceRefresh bypasses the provider usage cache; plain requests reuse it", async () => {
     let calls = 0;
     const service = new ProviderUsageService({
+      usageSources: { isEnabled: () => true },
       logger: pino({ level: "silent" }),
       fetchers: [
         {

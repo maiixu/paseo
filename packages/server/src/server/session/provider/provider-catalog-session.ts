@@ -77,7 +77,11 @@ export class ProviderCatalogSession {
   constructor(options: ProviderCatalogSessionOptions) {
     this.host = options.host;
     this.providerUsageService =
-      options.providerUsageService ?? new ProviderUsageService({ logger: options.logger });
+      options.providerUsageService ??
+      new ProviderUsageService({
+        logger: options.logger,
+        usageSources: { isEnabled: () => false },
+      });
     this.providerSnapshotManager = options.providerSnapshotManager;
     this.logger = options.logger;
   }
