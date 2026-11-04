@@ -6353,6 +6353,41 @@ describe("resource usage MCP tool", () => {
     });
   });
 
+  it("folds the requested model's window into allowance only when a model is passed", async () => {
+    const { agentManager, agentStorage } = createTestDeps();
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      callerAgentId: "owner-agent",
+      providerSnapshotManager: createOpenCodeManager().manager,
+      logger: createTestLogger(),
+      getResourceUsage: async () => ({
+        fetchedAt: new Date().toISOString(),
+        providers: [
+          {
+            providerId: "claude",
+            displayName: "Claude",
+            status: "available",
+            planLabel: null,
+            windows: [
+              { id: "weekly", label: "Weekly", remainingPct: 60 },
+              { id: "weekly_model_sonnet", label: "Weekly · Sonnet", remainingPct: 0 },
+            ],
+          },
+        ],
+      }),
+    });
+    const tool = registeredTool(server, "get_usage");
+    expect((await tool.handler({})).structuredContent).toMatchObject({
+      model: null,
+      resources: [{ allowance: "remaining", reason: "general_remaining_scoped_exhausted" }],
+    });
+    expect((await tool.handler({ model: "claude-sonnet-5-5" })).structuredContent).toMatchObject({
+      model: "claude-sonnet-5-5",
+      resources: [{ allowance: "exhausted", reason: "window_exhausted" }],
+    });
+  });
+
   it("reports missing observation capability instead of invented quota", async () => {
     const { agentManager, agentStorage } = createTestDeps();
     const server = await createAgentMcpServer({
