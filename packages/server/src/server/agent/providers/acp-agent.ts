@@ -1747,6 +1747,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   private readonly extensionCommandsParser?: ACPExtensionCommandsParser;
   private currentTurnUsage: AgentUsage | undefined;
   private activeForegroundTurnId: string | null = null;
+  private activePrompt: Promise<void> | null = null;
   private fallbackAssistantMessageId: string | null = null;
   private closed = false;
   private historyPending = false;
@@ -1925,7 +1926,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     this.pushEvent({ type: "turn_started", provider: this.provider, turnId });
     this.emitSubmittedUserMessage(prompt, messageId, turnId, options?.clientMessageId);
 
-    void this.connection
+    this.activePrompt = this.connection
       .prompt({
         sessionId: this.sessionId,
         messageId,
@@ -2495,7 +2496,12 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     this.cancelPendingPermissions();
 
     if (this.activeForegroundTurnId) {
+      const prompt = this.activePrompt;
       await this.connection.cancel({ sessionId: this.sessionId });
+      // ACP cancel is a notification: writing it does not acknowledge that the
+      // provider stopped. Only settlement of the captured prompt releases the turn.
+      // The manager bounds this wait and preserves the active run on timeout.
+      await prompt;
     }
   }
 
@@ -2813,7 +2819,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     return homedir();
   }
 
-  private async spawnProcess(): Promise<SpawnedACPProcess> {
+  protected async spawnProcess(): Promise<SpawnedACPProcess> {
     const prefix = await resolveProviderLaunch({
       commandConfig: this.runtimeSettings?.command,
       defaultBinary: this.defaultCommand[0],
@@ -3351,6 +3357,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       this.cancelPendingPermissions();
     }
     this.activeForegroundTurnId = null;
+    this.activePrompt = null;
     this.fallbackAssistantMessageId = null;
     if (this.submittedUserMessageTurnId === event.turnId) {
       this.submittedUserMessageTurnId = null;

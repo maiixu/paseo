@@ -1,8 +1,9 @@
-import { type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
+import { PassThrough } from "node:stream";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -140,10 +141,11 @@ function createSession(
   options: {
     terminateProcess?: ProcessTerminator;
     launchEnv?: Record<string, string>;
+    SessionClass?: typeof ACPAgentSession;
   } = {},
 ): ACPAgentSession {
   const { terminateProcess, launchEnv } = options;
-  return new ACPAgentSession(
+  return new (options.SessionClass ?? ACPAgentSession)(
     {
       provider: "claude-acp",
       cwd: "/tmp/paseo-acp-test",
@@ -3282,6 +3284,97 @@ describe("ACPAgentSession", () => {
         turnId: expect.any(String),
       },
     ]);
+  });
+
+  test("interrupt waits for the ACP prompt to settle after the cancel notification", async () => {
+    let resolvePrompt!: (response: PromptResponse) => void;
+    let receivedCancel!: () => void;
+    const cancelled = new Promise<void>((resolve) => {
+      receivedCancel = resolve;
+    });
+    const clientToAgent = new TransformStream();
+    const agentToClient = new TransformStream();
+    const initialize = { protocolVersion: PROTOCOL_VERSION, agentCapabilities: {} };
+    let prompts = 0;
+    const agent: Agent = {
+      async initialize() {
+        return initialize;
+      },
+      async newSession() {
+        return { sessionId: "session-1" };
+      },
+      async authenticate() {},
+      async prompt() {
+        if (prompts++ > 0) return { stopReason: "end_turn" };
+        return new Promise<PromptResponse>((resolve) => {
+          resolvePrompt = resolve;
+        });
+      },
+      async cancel() {
+        receivedCancel();
+      },
+    };
+    const upstream = new AgentSideConnection(
+      () => agent,
+      ndJsonStream(agentToClient.writable, clientToAgent.readable),
+    );
+    class ControlledSession extends ACPAgentSession {
+      protected override async spawnProcess(): Promise<SpawnedACPProcess> {
+        return {
+          child: Object.assign(new ChildProcess(), {
+            stdin: new PassThrough(),
+            stdout: new PassThrough(),
+            stderr: new PassThrough(),
+          }),
+          connection: new ClientSideConnection(
+            () => this,
+            ndJsonStream(clientToAgent.writable, agentToClient.readable),
+          ),
+          initialize,
+        };
+      }
+    }
+    const session = createSession({
+      SessionClass: ControlledSession,
+      terminateProcess: new FakeTerminator().terminate,
+    });
+    await session.initializeNewSession();
+    const events: AgentStreamEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    const first = await session.startTurn("first");
+    let interrupted = false;
+    const interrupt = session.interrupt().then(() => {
+      interrupted = true;
+      return;
+    });
+    await cancelled;
+    // Flush the notification write, which is not an acknowledgement of cancellation.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(interrupted).toBe(false);
+    await expect(session.startTurn("too soon")).rejects.toThrow(
+      "A foreground turn is already active",
+    );
+    resolvePrompt({ stopReason: "cancelled" });
+    await interrupt;
+    expect(events.filter((event) => event.type === "turn_canceled")).toEqual([
+      {
+        type: "turn_canceled",
+        provider: session.provider,
+        reason: "Interrupted",
+        turnId: first.turnId,
+      },
+    ]);
+    expect(upstream.signal.aborted).toBe(false);
+    const completed = new Promise<void>((resolve) => {
+      session.subscribe((event) => {
+        if (event.type === "turn_completed") resolve();
+      });
+    });
+    const next = await session.startTurn("next");
+    expect(next.turnId).not.toBe(first.turnId);
+    await completed;
+    await session.interrupt();
+    await session.close();
   });
 
   test("startTurn converts background prompt rejections into turn_failed events", async () => {
