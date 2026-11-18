@@ -8,6 +8,7 @@ import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import {
   AdaptiveModalSheet,
   AdaptiveTextInput,
+  SheetHeaderIconButton,
   type SheetHeader,
 } from "@/components/adaptive-modal-sheet";
 import { Button } from "@/components/ui/button";
@@ -95,11 +96,11 @@ function CustomModelRow({
 
   return (
     <View style={sheetStyles.modelRow}>
-      <Text style={sheetStyles.modelTitle} numberOfLines={1}>
+      <Text style={[sheetStyles.modelTitle, sheetStyles.customModelText]} numberOfLines={1}>
         {model.label}
       </Text>
       <Text
-        style={sheetStyles.monoHint}
+        style={[sheetStyles.monoHint, sheetStyles.customModelText]}
         numberOfLines={1}
         selectable
         dataSet={CODE_SURFACE_DATASET}
@@ -222,10 +223,10 @@ function AddCustomModelSubSheet({
         />
         {error ? <Text style={sheetStyles.errorText}>{error}</Text> : null}
         <View style={sheetStyles.formActions}>
-          <Button variant="secondary" size="sm" onPress={onClose} disabled={saving}>
+          <Button variant="secondary" onPress={onClose} disabled={saving}>
             {t("common.actions.cancel")}
           </Button>
-          <Button variant="default" size="sm" onPress={handleAdd} disabled={!canAdd || saving}>
+          <Button variant="default" onPress={handleAdd} disabled={!canAdd || saving}>
             {saving ? t("settings.providers.models.adding") : t("settings.providers.models.add")}
           </Button>
         </View>
@@ -275,27 +276,9 @@ function DiagnosticSubSheet({
     }
   }, [visible, fetchDiagnostic]);
 
-  const refreshButtonStyle = useCallback(
-    ({ hovered, pressed }: PressableStateCallbackType & { hovered?: boolean }) => [
-      sheetStyles.iconButton,
-      (Boolean(hovered) || pressed) && sheetStyles.iconButtonHovered,
-      loading ? sheetStyles.disabled : null,
-    ],
-    [loading],
-  );
-
   const handleRefreshPress = useCallback(() => {
     void fetchDiagnostic();
   }, [fetchDiagnostic]);
-
-  const copyButtonStyle = useCallback(
-    ({ hovered, pressed }: PressableStateCallbackType & { hovered?: boolean }) => [
-      sheetStyles.iconButton,
-      (Boolean(hovered) || pressed) && Boolean(diagnostic) && sheetStyles.iconButtonHovered,
-      diagnostic ? null : sheetStyles.disabled,
-    ],
-    [diagnostic],
-  );
 
   const handleCopyPress = useCallback(() => {
     if (!diagnostic) return;
@@ -308,49 +291,27 @@ function DiagnosticSubSheet({
     () => ({
       title: t("settings.providers.diagnostic.title"),
       actions: (
-        <View style={sheetStyles.headerActions}>
-          <Pressable
+        <>
+          <SheetHeaderIconButton
+            icon={Copy}
+            label={t("settings.providers.diagnostic.copyAccessibility")}
             onPress={handleCopyPress}
             disabled={!diagnostic}
-            hitSlop={8}
-            style={copyButtonStyle}
-            accessibilityRole="button"
-            accessibilityLabel={t("settings.providers.diagnostic.copyAccessibility")}
-          >
-            <Copy size={theme.iconSize.sm} color={theme.colors.foregroundMuted} />
-          </Pressable>
-          <Pressable
-            onPress={handleRefreshPress}
-            disabled={loading}
-            hitSlop={8}
-            style={refreshButtonStyle}
-            accessibilityRole="button"
-            accessibilityLabel={
+          />
+          <SheetHeaderIconButton
+            icon={RotateCw}
+            label={
               loading
                 ? t("settings.providers.diagnostic.refreshingAccessibility")
                 : t("settings.providers.diagnostic.refreshAccessibility")
             }
-          >
-            {loading ? (
-              <LoadingSpinner size={theme.iconSize.sm} color={theme.colors.foregroundMuted} />
-            ) : (
-              <RotateCw size={theme.iconSize.sm} color={theme.colors.foregroundMuted} />
-            )}
-          </Pressable>
-        </View>
+            onPress={handleRefreshPress}
+            busy={loading}
+          />
+        </>
       ),
     }),
-    [
-      copyButtonStyle,
-      diagnostic,
-      handleCopyPress,
-      handleRefreshPress,
-      loading,
-      refreshButtonStyle,
-      t,
-      theme.colors.foregroundMuted,
-      theme.iconSize.sm,
-    ],
+    [diagnostic, handleCopyPress, handleRefreshPress, loading, t],
   );
 
   let body: React.ReactNode;
@@ -436,18 +397,11 @@ function renderProviderSheetFooter({
         <ProviderUpdatedLabel fetchedAt={fetchedAt} isCompact={isCompact} />
       ) : null}
       <View style={actionsStyle}>
-        <Button
-          variant="secondary"
-          size="sm"
-          leftIcon={Plus}
-          onPress={onOpenAddSheet}
-          style={buttonStyle}
-        >
+        <Button variant="secondary" leftIcon={Plus} onPress={onOpenAddSheet} style={buttonStyle}>
           {t("settings.providers.models.addModel")}
         </Button>
         <Button
           variant="secondary"
-          size="sm"
           leftIcon={FileText}
           onPress={onOpenDiagSheet}
           style={buttonStyle}
@@ -456,7 +410,6 @@ function renderProviderSheetFooter({
         </Button>
         <Button
           variant="default"
-          size="sm"
           leftIcon={modelsRefreshing ? undefined : RotateCw}
           onPress={onRefreshModels}
           disabled={modelsRefreshing}
@@ -520,7 +473,7 @@ function ProviderModalBody(props: ProviderModalBodyProps) {
       <View style={sheetStyles.emptyState}>
         <AlertTriangle size={theme.iconSize.md} color={theme.colors.foregroundMuted} />
         <Text style={sheetStyles.mutedText}>{providerErrorMessage}</Text>
-        <Button variant="default" size="sm" onPress={onRefresh} disabled={modelsRefreshing}>
+        <Button variant="default" onPress={onRefresh} disabled={modelsRefreshing}>
           {modelsRefreshing
             ? t("settings.providers.models.retrying")
             : t("settings.providers.models.retry")}
@@ -762,17 +715,13 @@ const sheetStyles = StyleSheet.create((theme) => ({
   iconButton: {
     width: 28,
     height: 28,
+    flexShrink: 0,
     borderRadius: theme.borderRadius.full,
     alignItems: "center",
     justifyContent: "center",
   },
   iconButtonHovered: {
     backgroundColor: theme.colors.surface2,
-  },
-  headerActions: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing[1],
   },
   disabled: {
     opacity: 0.5,
@@ -806,6 +755,10 @@ const sheetStyles = StyleSheet.create((theme) => ({
     color: theme.colors.foreground,
     fontSize: theme.fontSize.base,
     flexShrink: 0,
+  },
+  customModelText: {
+    flexShrink: 1,
+    minWidth: 0,
   },
   modelRowFiller: {
     flex: 1,

@@ -17,7 +17,7 @@ const fixture = vi.hoisted(() => ({
     model: "astra",
     modeId: "full-access",
     thinkingOptionId: "medium",
-    featureValues: { fast_mode: false },
+    options: { fast_mode: false },
   },
 }));
 vi.mock("@/create-agent-preferences/launch-defaults", async (original) => ({
@@ -129,7 +129,7 @@ it("keeps an explicit Opus profile including its mode through snapshot refresh",
       modelId: "opus",
       modeId: "bypassPermissions",
       thinkingOptionId: "",
-      featureValues: {},
+      options: {},
     }),
   );
   fixture.entries = structuredClone(fixture.entries);

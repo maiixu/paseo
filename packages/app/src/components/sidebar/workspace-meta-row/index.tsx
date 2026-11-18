@@ -1,7 +1,8 @@
 import { getThemedProviderIcon } from "@/components/provider-icons";
+import { PressHighlight as Pressable } from "@/components/ui/press-highlight";
 import { Fragment, useCallback, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Pressable, Text, View, type GestureResponderEvent } from "react-native";
+import { Text, View, type GestureResponderEvent } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { ExternalLink, Folder, GitBranch, Globe } from "lucide-react-native";
 import {
@@ -16,7 +17,12 @@ import { getForgePresentation, normalizeForge } from "@/git/forge";
 import { openExternalUrl } from "@/utils/open-external-url";
 import { useSidebarMetaPreferences } from "@/components/sidebar/display-preferences/model";
 import type { Theme } from "@/styles/theme";
+import type { SidebarSurfaceBackdrop } from "@/styles/surface-backdrop";
 import { PullRequestStateIcon } from "@/git/pull-request-state-icon";
+import {
+  PluginWorkspaceRowBadgeItems,
+  usePluginWorkspaceRowBadgeItems,
+} from "@/plugins/workspace-row-badge-items";
 import { CheckIndicator } from "./check-indicator";
 import type { CheckSummary, CheckSummaryState } from "./check-summary";
 import { selectMetaRowItems, type MetaRowItem } from "./meta-items";
@@ -60,6 +66,9 @@ const dangerMapping = (theme: Theme) => ({ color: theme.colors.statusDanger });
  * state has its own colors — a label is a name a person chose, so it carries its own identity
  * color on a tint instead (see `WorkspaceLabelChip`). It sits last so the reported facts are
  * read first, and it stays the same height as the rest of the line.
+ *
+ * Plugin items follow everything the row knows itself. A plugin renders its slot as it likes:
+ * the row adds no separator, since only the plugin knows whether it has anything to say.
  */
 export function WorkspaceMetaRow({
   currentBranch,
@@ -70,6 +79,8 @@ export function WorkspaceMetaRow({
   labels = EMPTY_LABELS,
   provider = null,
   serverId,
+  workspace = null,
+  backdrop,
 }: {
   currentBranch: string | null;
   projectName: string | null;
@@ -79,6 +90,9 @@ export function WorkspaceMetaRow({
   labels?: readonly WorkspaceLabelDefinition[];
   provider?: string | null;
   serverId?: string;
+  /** The real workspace behind the row; previews leave it out and get no plugin items. */
+  workspace?: { serverId: string; workspaceId: string } | null;
+  backdrop: SidebarSurfaceBackdrop;
 }) {
   const { rowItems, checksDisplay } = useSidebarMetaPreferences();
   const items = selectMetaRowItems({
@@ -91,8 +105,9 @@ export function WorkspaceMetaRow({
     visible: rowItems,
     checksDisplay,
   });
+  const pluginItems = usePluginWorkspaceRowBadgeItems(workspace?.serverId ?? null);
 
-  if (items.length === 0 && !provider) return null;
+  if (items.length === 0 && !provider && (!workspace || pluginItems.length === 0)) return null;
   const ProviderIcon = provider ? getThemedProviderIcon(provider, serverId) : null;
 
   return (
@@ -105,10 +120,23 @@ export function WorkspaceMetaRow({
       ) : null}
       {items.map((item, index) => (
         <Fragment key={item.kind}>
-          {index > 0 || provider ? <Text style={styles.separator}>·</Text> : null}
+          {index > 0 || provider ? (
+            <Text
+              style={[
+                styles.separator,
+                backdrop === "surfaceSidebarHover" && styles.separatorHovered,
+                backdrop === "surfaceSidebarSelected" && styles.separatorSelected,
+              ]}
+            >
+              ·
+            </Text>
+          ) : null}
           <MetaItemNode item={item} hostBadge={hostBadge} leading={index === 0} />
         </Fragment>
       ))}
+      {workspace ? (
+        <PluginWorkspaceRowBadgeItems targets={pluginItems} workspaceId={workspace.workspaceId} />
+      ) : null}
     </View>
   );
 }
@@ -360,6 +388,8 @@ const styles = StyleSheet.create((theme) => ({
     lineHeight: 16,
     flexShrink: 0,
   },
+  separatorHovered: { color: theme.colors.foregroundSidebarHover },
+  separatorSelected: { color: theme.colors.foregroundSidebarSelected },
   // Tighter than the line's own gap so a run of chips reads as one item — see `LabelsItem`.
   // Shrinks at the same weight as the service name: both are arbitrary text somebody chose, so
   // a crowded line takes from the two of them in proportion rather than emptying one of them.

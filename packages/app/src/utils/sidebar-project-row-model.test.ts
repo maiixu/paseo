@@ -65,52 +65,44 @@ function project(overrides: ProjectOverrides = {}): SidebarProjectEntry {
 }
 
 describe("buildSidebarProjectRowModel", () => {
-  it("prefers the configured launch host and keeps its project placement", () => {
+  it("prefers the active host when the grouped project can create there", () => {
     const result = buildSidebarProjectRowModel({
       project: project({
         hosts: [
-          { serverId: "mac", iconWorkingDir: "/mac/repo", worktreeSupport: "supported" },
-          { serverId: "cloud", iconWorkingDir: "/cloud/repo", worktreeSupport: "supported" },
+          { serverId: "host-a", iconWorkingDir: "/repo/a", worktreeSupport: "supported" },
+          { serverId: "host-b", iconWorkingDir: "/repo/b", worktreeSupport: "supported" },
         ],
       }),
       collapsed: false,
-      defaultServerId: "cloud",
+      preferredServerId: "host-b",
     });
+
     expect(result.trailingAction).toEqual({
       kind: "new_workspace",
-      target: { serverId: "cloud", projectId: "project-cloud", iconWorkingDir: "/cloud/repo" },
+      target: { serverId: "host-b", projectId: "project-host-b", iconWorkingDir: "/repo/b" },
     });
   });
 
-  it.each([
-    {
-      defaultServerId: "missing",
-      worktreeSupport: "supported" as const,
-      iconWorkingDir: "/cloud/repo",
+  it.each(["host-b", "another-host"])(
+    "keeps the first eligible placement when preferred host %s cannot create here",
+    (preferredServerId) => {
+      const result = buildSidebarProjectRowModel({
+        project: project({
+          hosts: [
+            { serverId: "host-a", iconWorkingDir: "/repo/a", worktreeSupport: "supported" },
+            { serverId: "host-b", iconWorkingDir: "/repo/b", worktreeSupport: "unsupported" },
+          ],
+        }),
+        collapsed: false,
+        preferredServerId,
+      });
+
+      expect(result.trailingAction).toEqual({
+        kind: "new_workspace",
+        target: { serverId: "host-a", projectId: "project-host-a", iconWorkingDir: "/repo/a" },
+      });
     },
-    {
-      defaultServerId: "cloud",
-      worktreeSupport: "unsupported" as const,
-      iconWorkingDir: "/cloud/repo",
-    },
-    { defaultServerId: "cloud", worktreeSupport: "supported" as const, iconWorkingDir: " " },
-    { defaultServerId: null, worktreeSupport: "supported" as const, iconWorkingDir: "/cloud/repo" },
-  ])("falls back to the first eligible placement: %j", ({ defaultServerId, ...cloud }) => {
-    const result = buildSidebarProjectRowModel({
-      project: project({
-        hosts: [
-          { serverId: "mac", iconWorkingDir: "/mac/repo", worktreeSupport: "supported" },
-          { serverId: "cloud", ...cloud },
-        ],
-      }),
-      collapsed: false,
-      defaultServerId,
-    });
-    expect(result.trailingAction).toEqual({
-      kind: "new_workspace",
-      target: { serverId: "mac", projectId: "project-mac", iconWorkingDir: "/mac/repo" },
-    });
-  });
+  );
 
   it("renders a non-git single-workspace project as an expandable section", () => {
     const result = buildSidebarProjectRowModel({

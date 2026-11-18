@@ -79,7 +79,7 @@ export function resolvePinnedLaunchProfile(input: {
       provider: provider.provider,
       ...values,
     },
-    featureValues: profile.featureValues ?? {},
+    featureValues: profile.options ?? profile.featureValues ?? {},
   };
 }
 

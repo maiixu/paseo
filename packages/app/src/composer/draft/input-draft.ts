@@ -1,33 +1,36 @@
 import { DEFAULT_LAUNCH_PROFILE_ID } from "@/create-agent-preferences/launch-defaults";
 import { draftLaunchSelections } from "@/create-agent-preferences/draft-launch-selection";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { JsonValue } from "@getpaseo/protocol/agent-types";
 import type { UserComposerAttachment } from "@/attachments/types";
 import type { TextReplacement } from "@/composer/types";
 import type { DraftAgentControlsProps } from "@/composer/agent-controls";
-import type { DraftCommandTarget } from "@/hooks/use-agent-commands-query";
+import type { DraftCommandTarget } from "@/agent-commands";
 import {
   useAgentFormState,
   type FormInitialValues,
   type UseAgentFormStateResult,
 } from "@/hooks/use-agent-form-state";
-import { useDraftAgentFeatures } from "@/hooks/use-draft-agent-features";
+import { useDraftProviderOptions } from "@/hooks/use-draft-provider-options";
 import {
   buildDraftAgentControls,
-  hasDraftContent,
   resolveDraftKey,
   type DraftKeyInput,
 } from "@/composer/draft/input-draft-core";
 import {
   buildDraftCommandTarget,
+  resolveEffectiveComposerModeId,
   resolveEffectiveComposerModelId,
   resolveEffectiveComposerThinkingOptionId,
   type ProviderSelectionState,
 } from "@/provider-selection/provider-selection";
-import { useDraftStore } from "@/stores/draft-store";
+import { useDraftStore, type DraftInput } from "@/stores/draft-store";
 import { AfterPaintPublication } from "@/composer/after-paint-publication";
 import { useShallow } from "zustand/shallow";
 import type { ComposerTextSource } from "@/composer/text-source";
 import { isWeb } from "@/constants/platform";
+
+const NO_METADATA: Record<string, JsonValue> = {};
 
 type AttachmentUpdater =
   | UserComposerAttachment[]
@@ -36,6 +39,9 @@ type AttachmentUpdater =
 interface AgentInputDraftComposerOptions {
   initialServerId: string | null;
   initialValues?: FormInitialValues;
+  initialProviderOptions?: Record<string, unknown>;
+  /** Which composer a plugin's `useComposer()` reports. */
+  context?: "draft" | "new-workspace";
   initialFeatureValues?: Record<string, unknown>;
   launchDraftId?: string;
   isVisible?: boolean;
@@ -49,9 +55,12 @@ interface UseAgentInputDraftInput {
 
 type DraftComposerState = UseAgentFormStateResult & {
   workingDir: string;
+  effectiveModeId: string;
   effectiveModelId: string;
   effectiveThinkingOptionId: string;
-  featureValues: Record<string, unknown> | undefined;
+  providerOptions: Record<string, unknown> | undefined;
+  /** What plugins set on the agent this draft creates. */
+  metadata: Record<string, JsonValue>;
   agentControls: DraftAgentControlsProps;
   commandDraft: DraftCommandTarget;
 };
@@ -141,14 +150,16 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
   const isHydrated = hydratedDraftKey === draftKey;
   const textReplacementRevisionRef = useRef(0);
   const [textReplacement, setTextReplacement] = useState<TextReplacement>(() => ({
+    kind: "initial",
     key: `${draftKey}:0`,
     text: textSource.getSnapshot(),
   }));
 
   const publishTextReplacement = useCallback(
-    (nextText: string) => {
+    (kind: "hydrated" | "replace", nextText: string) => {
       textReplacementRevisionRef.current += 1;
       setTextReplacement({
+        kind,
         key: `${draftKey}:${textReplacementRevisionRef.current}`,
         text: nextText,
       });
@@ -157,21 +168,8 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
   );
 
   const saveDraft = useCallback(
-    (
-      update: (draft: { text: string; attachments: UserComposerAttachment[] }) => {
-        text: string;
-        attachments: UserComposerAttachment[];
-      },
-    ) => {
-      const store = useDraftStore.getState();
-      const current = store.getDraftInput(draftKey) ?? { text: "", attachments: [] };
-      const next = update(current);
-      if (!hasDraftContent(next)) {
-        store.clearDraftInput({ draftKey, lifecycle: "abandoned" });
-        return;
-      }
-      store.saveDraftInput({ draftKey, draft: next });
-    },
+    (update: (draft: DraftInput) => DraftInput) =>
+      useDraftStore.getState().updateDraftInput({ draftKey, update }),
     [draftKey],
   );
 
@@ -182,6 +180,20 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
       }),
     [draftKey],
   );
+
+  // Text another module put in the draft (a plugin writing to a composer that is not on screen)
+  // reaches the input the way a rewind restore does.
+  const replacementRequest = useDraftStore(
+    (state) => state.textReplacementRequestByDraftKey[draftKey] ?? 0,
+  );
+  const shownReplacementRequestRef = useRef({ draftKey, request: replacementRequest });
+  useEffect(() => {
+    const shown = shownReplacementRequestRef.current;
+    if (shown.draftKey === draftKey && shown.request === replacementRequest) return;
+    shownReplacementRequestRef.current = { draftKey, request: replacementRequest };
+    textPublication.cancel();
+    publishTextReplacement("replace", textSource.getSnapshot());
+  }, [draftKey, publishTextReplacement, replacementRequest, textPublication, textSource]);
 
   const editText = useCallback(
     (nextText: string) => {
@@ -198,7 +210,7 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
     (nextText: string) => {
       textPublication.cancel();
       useDraftStore.getState().editDraftText({ draftKey, text: nextText });
-      publishTextReplacement(nextText);
+      publishTextReplacement("replace", nextText);
     },
     [draftKey, publishTextReplacement, textPublication],
   );
@@ -213,12 +225,20 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
     [saveDraft],
   );
 
+  const metadata = useDraftStore((state) => state.metadataByDraftKey[draftKey] ?? NO_METADATA);
+  const setMetadata = useCallback(
+    (patch: Record<string, JsonValue>) =>
+      useDraftStore.getState().patchDraftMetadata({ draftKey, patch }),
+    [draftKey],
+  );
+
   const clear = useCallback(
     (lifecycle: "sent" | "abandoned") => {
       textPublication.cancel();
       finalizedLaunchDraftRef.current = launchDraftId;
       draftLaunchSelections.clear(launchDraftId);
       useDraftStore.getState().clearDraftInput({ draftKey, lifecycle });
+      if (lifecycle === "sent") useDraftStore.getState().clearDraftMetadata({ draftKey });
     },
     [draftKey, launchDraftId, textPublication],
   );
@@ -253,7 +273,7 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
       await useDraftStore.getState().hydrateDraftInput({ draftKey });
       if (!cancelled) {
         const hydratedText = useDraftStore.getState().getDraftInput(draftKey)?.text ?? "";
-        publishTextReplacement(hydratedText);
+        publishTextReplacement("hydrated", hydratedText);
         setHydratedDraftKey(draftKey);
       }
     })();
@@ -282,6 +302,11 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
     ],
   );
 
+  const effectiveModeId = useMemo(
+    () => resolveEffectiveComposerModeId(providerSelection, formState.isModelLoading),
+    [formState.isModelLoading, providerSelection],
+  );
+
   const effectiveModelId = useMemo(
     () => resolveEffectiveComposerModelId(providerSelection),
     [providerSelection],
@@ -293,20 +318,23 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
   );
 
   const {
-    features: draftFeatures,
-    featureValues: draftFeatureValues,
-    selectionFeatureValues: draftFeatureSelections,
-    setFeatureValue: setDraftFeatureValue,
-    applyProfileFeatureValues,
-  } = useDraftAgentFeatures({
+    optionControls: draftOptionControls,
+    options: draftOptions,
+    shownOptions: draftShownOptions,
+    setOption: setDraftOption,
+    applyProfile: applyProfileOptions,
+  } = useDraftProviderOptions({
     serverId: formState.selectedServerId,
     provider: formState.selectedProvider,
+    getProvider: formState.getSelectedProvider,
     cwd: workingDir,
     modeId: formState.selectedMode,
     modelId: effectiveModelId,
     thinkingOptionId: effectiveThinkingOptionId,
-    initialFeatureValues,
-    defaultFeatureValues: formState.defaultFeatureValues,
+    initialOptions:
+      composerOptions?.initialProviderOptions ??
+      initialFeatureValues ??
+      formState.defaultFeatureValues,
   });
 
   useEffect(() => {
@@ -319,22 +347,16 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
       model: effectiveModelId,
       modeId: formState.selectedMode,
       thinkingOptionId: effectiveThinkingOptionId,
-      featureValues: draftFeatureSelections,
+      featureValues: draftOptions,
     });
-  }, [
-    launchDraftId,
-    formState,
-    effectiveModelId,
-    effectiveThinkingOptionId,
-    draftFeatureSelections,
-  ]);
+  }, [launchDraftId, formState, effectiveModelId, effectiveThinkingOptionId, draftOptions]);
 
   const applyDraftAgentProfile = useCallback(
     (profile: Parameters<typeof formState.applyProfileFromUser>[0]) => {
       formState.applyProfileFromUser(profile);
-      applyProfileFeatureValues(profile.featureValues);
+      applyProfileOptions({ provider: profile.provider, options: profile.options });
     },
-    [applyProfileFeatureValues, formState],
+    [applyProfileOptions, formState],
   );
 
   const commandDraft = useMemo(
@@ -344,15 +366,9 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
         cwd: workingDir,
         effectiveModelId,
         effectiveThinkingOptionId,
-        featureValues: draftFeatureValues,
+        providerOptions: draftOptions,
       }),
-    [
-      effectiveModelId,
-      effectiveThinkingOptionId,
-      draftFeatureValues,
-      providerSelection,
-      workingDir,
-    ],
+    [effectiveModelId, effectiveThinkingOptionId, draftOptions, providerSelection, workingDir],
   );
 
   const composerState = useMemo<DraftComposerState | null>(() => {
@@ -363,27 +379,37 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
     return {
       ...formState,
       workingDir,
+      effectiveModeId,
       effectiveModelId,
       effectiveThinkingOptionId,
-      featureValues: draftFeatureValues,
+      providerOptions: draftOptions,
+      metadata,
       agentControls: buildDraftAgentControls({
         formState,
-        features: draftFeatures,
-        onSetFeature: setDraftFeatureValue,
+        optionControls: draftOptionControls,
+        options: draftShownOptions,
+        onSetOption: setDraftOption,
         onApplyAgentProfile: applyDraftAgentProfile,
+        context: composerOptions.context ?? "draft",
+        metadata,
+        onSetMetadata: setMetadata,
       }),
       commandDraft,
     };
   }, [
     commandDraft,
     composerOptions,
+    effectiveModeId,
     effectiveModelId,
     effectiveThinkingOptionId,
-    draftFeatures,
-    draftFeatureValues,
+    draftOptionControls,
+    draftOptions,
+    draftShownOptions,
+    setDraftOption,
     applyDraftAgentProfile,
     formState,
-    setDraftFeatureValue,
+    metadata,
+    setMetadata,
     workingDir,
   ]);
 
@@ -403,6 +429,7 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
 
 export const __private__ = {
   resolveDraftKey,
+  resolveEffectiveComposerModeId,
   resolveEffectiveComposerModelId,
   resolveEffectiveComposerThinkingOptionId,
   buildDraftCommandTarget,

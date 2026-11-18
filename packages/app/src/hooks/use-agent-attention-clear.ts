@@ -1,14 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { AppState } from "react-native";
-import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
-import {
-  shouldClearAgentAttention,
-  shouldClearViewedAgentCompletion,
-  type AgentAttentionClearTrigger,
-} from "@/utils/agent-attention";
-import { getIsAppActivelyVisible } from "@/utils/app-visibility";
-import { getIsElectron, isWeb } from "@/constants/platform";
 import type { Agent } from "@/stores/session-store";
+import { getIsElectron } from "@/constants/platform";
+import { useEffect, useMemo, useState } from "react";
+import { AppState } from "react-native";
+import { DaemonConnectionError, type DaemonClient } from "@getpaseo/client/internal/daemon-client";
+import { createAgentAttentionController } from "@/utils/agent-attention";
+import { getIsAppActivelyVisible } from "@/utils/app-visibility";
+import { isWeb } from "@/constants/platform";
+import { useStableEvent } from "@/hooks/use-stable-event";
 
 type AttentionReason = "finished" | "error" | "permission" | null | undefined;
 
@@ -16,56 +14,50 @@ interface UseAgentAttentionClearParams {
   agentId: string | null | undefined;
   client: DaemonClient | null;
   isConnected: boolean;
-  requiresAttention: boolean | null | undefined;
+  isAgentDataReady: boolean;
+  requiresAttention: boolean;
   attentionReason: AttentionReason;
-  agentStatus: Agent["status"] | null;
   isScreenFocused: boolean;
+  agentStatus: Agent["status"] | null;
+  focusRequest: object | null;
+  onError: (error: unknown) => void;
 }
 
 interface AgentAttentionClearController {
   clearOnInputFocus: () => void;
   clearOnPromptSend: () => void;
-  clearOnAgentBlur: () => void;
 }
 
 export function useAgentAttentionClear({
   agentId,
   client,
   isConnected,
+  isAgentDataReady,
   requiresAttention,
   attentionReason,
-  agentStatus,
   isScreenFocused,
+  agentStatus,
+  focusRequest,
+  onError,
 }: UseAgentAttentionClearParams): AgentAttentionClearController {
   const [isAppVisible, setIsAppVisible] = useState<boolean>(() => getIsAppActivelyVisible());
-  const deferredFocusEntryClearRef = useRef(false);
-  const prevRequiresAttentionRef = useRef(Boolean(requiresAttention));
-  const prevActivelyViewedRef = useRef(isScreenFocused && getIsAppActivelyVisible());
-  const prevScreenFocusedRef = useRef(false);
-  const prevAppVisibleRef = useRef(getIsAppActivelyVisible());
-
-  const clearAttention = useCallback(
-    (trigger: AgentAttentionClearTrigger) => {
-      const resolvedAgentId = agentId?.trim();
-      if (!client || !resolvedAgentId) {
-        return;
-      }
-      if (
-        !shouldClearAgentAttention({
-          agentId: resolvedAgentId,
-          isConnected,
-          requiresAttention,
-          attentionReason,
-          trigger,
-          hasDeferredFocusEntryClear: deferredFocusEntryClearRef.current,
-        })
-      ) {
-        return;
-      }
-      deferredFocusEntryClearRef.current = false;
-      client.clearAgentAttention(resolvedAgentId).catch(() => {});
-    },
-    [agentId, attentionReason, client, isConnected, requiresAttention],
+  const clearAttention = useStableEvent(async (id: string) => {
+    if (client) await client.clearAgentAttention(id);
+  });
+  const reportError = useStableEvent((error: unknown) => {
+    // The timeline's reconnect status already explains a lost connection.
+    if (error instanceof DaemonConnectionError && error.code === "DAEMON_CONNECTION_LOST") return;
+    onError(error);
+  });
+  const controller = useMemo(
+    () =>
+      createAgentAttentionController({
+        clear: async () => {
+          if (agentId) await clearAttention(agentId);
+        },
+        onError: reportError,
+      }),
+    [agentId, clearAttention, reportError],
   );
 
   useEffect(() => {
@@ -94,57 +86,51 @@ export function useAgentAttentionClear({
   }, []);
 
   useEffect(() => {
-    if (!requiresAttention) {
-      deferredFocusEntryClearRef.current = false;
-    }
-  }, [requiresAttention]);
+    controller.update({
+      focused: isScreenFocused && isAppVisible,
+      ready: Boolean(client && agentId && isConnected && isAgentDataReady),
+      requiresAttention,
+      attentionReason,
+      focusRequest,
+    });
+  }, [
+    controller,
+    client,
+    agentId,
+    isConnected,
+    isAgentDataReady,
+    isScreenFocused,
+    isAppVisible,
+    requiresAttention,
+    attentionReason,
+    focusRequest,
+  ]);
 
   useEffect(() => {
-    const isActivelyViewed = isScreenFocused && isAppVisible;
     if (
-      !prevRequiresAttentionRef.current &&
-      Boolean(requiresAttention) &&
-      prevActivelyViewedRef.current &&
-      isActivelyViewed
+      isWeb &&
+      !getIsElectron() &&
+      isScreenFocused &&
+      isAppVisible &&
+      isAgentDataReady &&
+      agentStatus === "idle" &&
+      requiresAttention &&
+      attentionReason === "finished"
     ) {
-      deferredFocusEntryClearRef.current = true;
+      controller.focus();
     }
-    prevRequiresAttentionRef.current = Boolean(requiresAttention);
-    prevActivelyViewedRef.current = isActivelyViewed;
-  }, [isAppVisible, isScreenFocused, requiresAttention]);
-
-  useEffect(() => {
-    const enteredScreenFocus = !prevScreenFocusedRef.current && isScreenFocused && isAppVisible;
-    const resumedIntoFocusedAgent = !prevAppVisibleRef.current && isAppVisible && isScreenFocused;
-    const isBrowser = isWeb && !getIsElectron();
-    const isActivelyViewed = isScreenFocused && isAppVisible;
-    const viewedCompletion =
-      isBrowser &&
-      shouldClearViewedAgentCompletion({
-        status: agentStatus,
-        attentionReason,
-        isActivelyViewed,
-      });
-
-    if (viewedCompletion) {
-      clearAttention("completion-viewed");
-    } else if (enteredScreenFocus || resumedIntoFocusedAgent) {
-      clearAttention("focus-entry");
-    }
-
-    prevScreenFocusedRef.current = isScreenFocused;
-    prevAppVisibleRef.current = isAppVisible;
-  }, [agentStatus, attentionReason, clearAttention, isAppVisible, isScreenFocused]);
+  }, [
+    controller,
+    isScreenFocused,
+    isAppVisible,
+    isAgentDataReady,
+    agentStatus,
+    requiresAttention,
+    attentionReason,
+  ]);
 
   return {
-    clearOnInputFocus: useCallback(() => {
-      clearAttention("input-focus");
-    }, [clearAttention]),
-    clearOnPromptSend: useCallback(() => {
-      clearAttention("prompt-send");
-    }, [clearAttention]),
-    clearOnAgentBlur: useCallback(() => {
-      clearAttention("agent-blur");
-    }, [clearAttention]),
+    clearOnInputFocus: controller.focus,
+    clearOnPromptSend: controller.focus,
   };
 }

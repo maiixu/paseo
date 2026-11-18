@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { getIsElectronRuntimeMac } from "@/constants/layout";
 import { useAggregatedAgents } from "./use-aggregated-agents";
 import { getDesktopHost } from "@/desktop/host";
-import { useWorkspaceStatusesForBadges } from "@/stores/session-store-hooks";
-import { deriveMacDockBadgeCountFromWorkspaceStatuses } from "@/utils/desktop-badge-state";
+import { useSessionStore } from "@/stores/session-store";
+import { selectMacDockBadgeCount } from "@/utils/desktop-badge-state";
 import { getIsElectron, isNative } from "@/constants/platform";
 import { useCurrentBrowserAgent } from "@/browser-feedback/current-agent";
 
@@ -122,17 +122,16 @@ function BrowserFaviconStatus() {
 
 function DesktopFaviconStatus() {
   const { agents } = useAggregatedAgents();
-  const workspaceStatuses = useWorkspaceStatusesForBadges();
+  const dockBadgeCount = useSessionStore(selectMacDockBadgeCount);
   const lastDockBadgeCountRef = useRef<number | undefined>(undefined);
   useFavicon(deriveFaviconStatus(agents));
 
   useEffect(() => {
-    const dockBadgeCount = deriveMacDockBadgeCountFromWorkspaceStatuses(workspaceStatuses);
     if (dockBadgeCount !== lastDockBadgeCountRef.current) {
       lastDockBadgeCountRef.current = dockBadgeCount;
       void updateMacDockBadge(dockBadgeCount);
     }
-  }, [workspaceStatuses]);
+  }, [dockBadgeCount]);
   return null;
 }
 

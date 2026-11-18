@@ -759,4 +759,109 @@ describe("assistant selection copy inside highlighted code", () => {
       "```typescript\nconst answer = 1;\n  if (answer) {\n    doThing();\n```\n\nAfter the block.",
     );
   });
+
+  it("keeps line breaks when a quote selection ends partway through code", () => {
+    const message = mountHighlighted();
+    const quote = document.createElement("div");
+    quote.setAttribute("data-paseo-markdown-tag", "blockquote");
+    quote.textContent = "Quoted context";
+    message.querySelector('[data-paseo-markdown-tag="pre"]')!.before(quote);
+
+    const content = copyBetween(
+      [tokenText(message, "Quoted context"), 0],
+      [tokenText(message, " (answer)"), 9],
+    );
+
+    expect(content?.plainText).toBe(
+      "> Quoted context\n\n```typescript\nconst answer = 1;\n  if (answer)\n```",
+    );
+  });
+
+  it("keeps indented code lines inside their list item", () => {
+    const host = document.createElement("div");
+    host.innerHTML = [
+      '<div data-testid="assistant-message">',
+      '<div data-paseo-markdown-tag="ol" data-paseo-markdown-list-start="1">',
+      '<div data-paseo-markdown-tag="li">',
+      '<div data-paseo-markdown-ignore="true" data-paseo-markdown-list-marker="true">1.</div>',
+      '<div><div data-paseo-markdown-tag="p"><span>Item text</span></div>',
+      highlightedCodeBlock("typescript"),
+      "</div></div></div></div>",
+    ].join("");
+    document.body.append(host);
+
+    const content = copyBetween([tokenText(host, "1."), 0], [tokenText(host, " (answer)"), 9]);
+
+    expect(content?.plainText).toBe(
+      "1. Item text\n\n    ```typescript\n    const answer = 1;\n      if (answer)\n    ```",
+    );
+  });
+
+  it("keeps line breaks when a selection starts partway through code", () => {
+    const message = mountHighlighted();
+
+    const content = copyBetween(
+      [tokenText(message, " answer"), 1],
+      [tokenText(message, "After the block."), "After the block.".length],
+    );
+
+    expect(content?.plainText).toBe(
+      "```typescript\nanswer = 1;\n  if (answer) {\n    doThing();\n```\n\nAfter the block.",
+    );
+  });
+});
+
+describe("semantic library output", () => {
+  it("copies a partial strong span as plain text", () => {
+    const host = document.createElement("div");
+    host.innerHTML =
+      '<div data-testid="assistant-message"><p>Before <strong>bold text</strong> after</p></div>';
+    document.body.append(host);
+    const text = host.querySelector("strong")!.firstChild!;
+    const range = document.createRange();
+    range.setStart(text, 1);
+    range.setEnd(text, 4);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    expect(createAssistantSelectionClipboardContent(selection)?.plainText).toBe("old");
+    expect(createAssistantSelectionClipboardContent(selection)?.html).not.toContain("<strong>");
+    host.remove();
+  });
+});
+
+it("copies native semantic ordered lists with their original numbers", () => {
+  const host = document.createElement("div");
+  host.innerHTML =
+    '<div data-testid="assistant-message"><ol start="3"><li>Third item</li><li>Fourth item</li></ol></div>';
+  document.body.append(host);
+  const selection = selectNodeContents(host.querySelector("ol")!);
+  const content = createAssistantSelectionClipboardContent(selection);
+  expect(content?.plainText).toContain("3. Third item");
+  expect(content?.plainText).toContain("4. Fourth item");
+  host.remove();
+});
+
+it("copies a selection inside semantic inline code without Markdown escaping", () => {
+  const message = mountFixture();
+  message.innerHTML = "<p>Run <code>apply_patch</code> now.</p>";
+  const code = fixtureElement(message, "code");
+  expect(createAssistantSelectionClipboardContent(selectText(code, 0, 11))?.plainText).toBe(
+    "apply_patch",
+  );
+});
+
+it("copies a workspace image path instead of its temporary display URL", () => {
+  const message = mountFixture();
+  const sources = JSON.stringify({ "blob:preview": "assets/chart.png" });
+  message.innerHTML = '<div><img src="blob:preview" alt="chart"></div>';
+  message.firstElementChild!.setAttribute("data-paseo-markdown-image-sources", sources);
+  const selection = window.getSelection()!;
+  const range = document.createRange();
+  range.selectNode(message.querySelector("img")!);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  expect(createAssistantSelectionClipboardContent(selection)?.plainText).toBe(
+    "![chart](assets/chart.png)",
+  );
 });

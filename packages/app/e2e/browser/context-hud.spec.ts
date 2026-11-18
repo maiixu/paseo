@@ -27,11 +27,17 @@ for (const viewport of [
       await expect(meter).toHaveText(/\d+%/);
       const box = await hud.boundingBox();
       expect(box?.y).toBeLessThan(100);
-      await meter.hover();
+      if (viewport.width < 600) await meter.click();
+      else await meter.hover();
       await expect(page.getByText("Context window", { exact: true })).toBeVisible();
-      await page.mouse.move(0, 300);
+      if (viewport.width < 600) await page.keyboard.press("Escape");
+      else await page.mouse.move(0, 300);
       await expect(meter).toBeVisible();
       await page.screenshot({ path: `/tmp/context-hud-${viewport.width}.png` });
+    } catch (error) {
+      console.log("HUD failure before cleanup", await page.locator("body").innerText());
+      await page.screenshot({ path: `/tmp/context-hud-failure-${viewport.width}.png` });
+      throw error;
     } finally {
       await session.cleanup();
     }

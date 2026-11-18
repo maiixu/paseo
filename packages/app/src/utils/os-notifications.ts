@@ -1,6 +1,8 @@
+import { buildNotificationRoute } from "./notification-routing";
+export { WEB_NOTIFICATION_CLICK_EVENT } from "@/notification-open";
 import { Asset } from "expo-asset";
 import { getDesktopHost } from "@/desktop/host";
-import { buildNotificationRoute, resolveNotificationTarget } from "./notification-routing";
+import { parseNotificationOpenTarget, WEB_NOTIFICATION_CLICK_EVENT } from "@/notification-open";
 import { isNative } from "@/constants/platform";
 import type { BrowserFeedbackNotification } from "@getpaseo/protocol/browser-feedback";
 import { getBrowserCompanion } from "@/browser-feedback/companion-client";
@@ -20,8 +22,6 @@ interface WebNotificationInstance {
   close: () => void;
   addEventListener: (type: "click", listener: (event: Event) => void) => void;
 }
-
-export const WEB_NOTIFICATION_CLICK_EVENT = "paseo:web-notification-click";
 
 let permissionRequest: Promise<boolean> | null = null;
 let notificationIconUrl: string | null | undefined;
@@ -102,8 +102,7 @@ export async function ensureOsNotificationPermission(): Promise<boolean> {
 }
 
 function hasNotificationClickTarget(data: Record<string, unknown> | undefined): boolean {
-  const target = resolveNotificationTarget(data);
-  return target.serverId !== null || target.agentId !== null || target.workspaceId !== null;
+  return parseNotificationOpenTarget(data) !== null;
 }
 
 function getWebNotificationIconUrl(): string | undefined {

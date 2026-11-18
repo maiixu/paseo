@@ -76,9 +76,10 @@ export function buildSidebarShortcutSections(input: {
 
       if (shortcutIndexByWorkspaceKey.has(workspace.workspaceKey)) continue;
 
-      const shortcutNumber = shortcutTargets.length + 1;
       shortcutTargets.push(createShortcutTarget(workspace));
-      shortcutIndexByWorkspaceKey.set(workspace.workspaceKey, shortcutNumber);
+      if (shortcutTargets.length <= maxShortcuts) {
+        shortcutIndexByWorkspaceKey.set(workspace.workspaceKey, shortcutTargets.length);
+      }
     }
   }
 

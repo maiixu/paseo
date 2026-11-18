@@ -3,7 +3,7 @@ import type { WorktreeSource } from "../utils/worktree.js";
 
 export type WorktreeCreationIntent = Exclude<
   WorktreeSource,
-  { kind: "restore" | "restore-from-base" }
+  { kind: "restore" | "restore-from-base" | "restore-commit" }
 >;
 
 export interface ResolveWorktreeCreationIntentInput {
@@ -191,7 +191,8 @@ async function resolvePrCheckoutIntent(
   }) ?? [{ remoteName: "origin", remoteRef: `refs/heads/${headRef}` }];
   const localBranchName = service.buildPrLocalBranchName?.({ headRef, checkoutTarget });
   const crossRepository = resolveCrossRepositoryFields(checkoutTarget);
-  const trackOriginHead = !checkoutTarget.isCrossRepository;
+  const trackOriginHead =
+    !checkoutTarget.isCrossRepository && checkoutTarget.headRefKind !== "pull-ref";
 
   return {
     kind: "checkout-change-request",

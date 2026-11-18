@@ -2,17 +2,18 @@ import { useCallback } from "react";
 import { useSessionStore } from "@/stores/session-store";
 import { useProviderUsage } from "@/provider-usage/use-provider-usage";
 import { ProviderUsageTooltipSection } from "@/provider-usage/tooltip-section";
+import { useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { UsageCard } from "./card";
-import { usageCopy } from "./copy";
 import { useUsageDisplay } from "./display";
 import { useAgentUsage } from "./queries";
 import type { UsageReportEntry } from "./types";
 
 /**
  * The usage of the account an agent runs under, for its context window details: one card per
- * report as it streams in, without pins. Nothing on hosts that cannot report usage, or for an
+ * report in the user's card order, without pins. Nothing on hosts that cannot report usage, or for an
  * agent with no account to report.
  */
 export function AgentUsage({
@@ -64,6 +65,7 @@ function PluginAgentUsage({
   agentId: string;
   refreshable: boolean;
 }) {
+  const { t } = useTranslation();
   const view = useAgentUsage(serverId, agentId);
   if (view.kind === "none") return null;
   return (
@@ -78,7 +80,7 @@ function PluginAgentUsage({
         />
       ) : (
         <Text style={styles.message}>
-          {view.kind === "loading" ? usageCopy.loading : view.message}
+          {view.kind === "loading" ? t("providerUsage.loading") : view.message}
         </Text>
       )}
     </>
@@ -97,7 +99,8 @@ function AgentUsageCards({
   refreshable: boolean;
 }) {
   const { display } = useUsageDisplay(reports);
-  return reports.map((entry) => (
+  const arranged = useMemo(() => display.arrange(reports), [display, reports]);
+  return arranged.map((entry) => (
     <UsageCard
       key={entry.id}
       serverId={serverId}

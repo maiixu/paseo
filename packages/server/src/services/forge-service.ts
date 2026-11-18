@@ -39,6 +39,8 @@ export interface PullRequestCheckoutTarget {
   headRepositorySshUrl: string | null;
   headRepositoryUrl: string | null;
   isCrossRepository: boolean;
+  /** "pull-ref" when headRefName is a synthetic pull ref, not a real branch name (agit PRs, deleted branches); undefined means "branch" */
+  headRefKind?: "branch" | "pull-ref";
 }
 
 export interface PullRequestCheckoutRef {
@@ -126,6 +128,7 @@ export interface CurrentPullRequestStatus {
   state: string;
   baseRefName: string;
   headRefName: string;
+  headSha?: string;
   isMerged: boolean;
   isDraft?: boolean;
   mergeable: PullRequestMergeable;
@@ -441,9 +444,9 @@ export interface ForgeService {
   getPullRequestCheckoutTarget(options: GetPullRequestOptions): Promise<PullRequestCheckoutTarget>;
   /**
    * Refs to fetch for a change-request checkout when the resolved checkout
-   * target carries none. Adapters that expose a universal change-request head
-   * ref (GitHub's refs/pull/N/head) return it here; others let the shell fall
-   * back to the head branch.
+   * target carries none. Adapters with a universal change-request head ref
+   * (refs/pull/N/head) return it here; others let the shell fall back to the
+   * head branch.
    */
   defaultCheckoutRefs?(params: {
     changeRequestNumber: number;
@@ -451,7 +454,7 @@ export interface ForgeService {
   }): PullRequestCheckoutRef[];
   /**
    * Local branch name for a checked-out change request when the adapter
-   * disambiguates cross-repository heads (GitHub prefixes the fork owner).
+   * disambiguates cross-repository heads (prefixes the fork owner).
    * Returns undefined to keep the head ref name as-is.
    */
   buildPrLocalBranchName?(params: {
@@ -464,6 +467,13 @@ export interface ForgeService {
    * Others reject a cross-repo checkout that carries no refs.
    */
   supportsCrossRepoCheckoutWithoutRefs?: boolean;
+  /**
+   * Repository path that owns the issue and change-request numbers of the
+   * checkout's origin repository when that is a different repository, such as a
+   * fork's parent. Null when the origin owns its numbers. Adapters whose forge
+   * has no fork model omit it.
+   */
+  getReferenceRepository?(options: { cwd: string } & ForgeReadOptions): Promise<string | null>;
   getCurrentPullRequestStatus(
     options: {
       cwd: string;
