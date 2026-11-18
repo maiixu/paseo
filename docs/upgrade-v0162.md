@@ -1,19 +1,48 @@
-# Personal Paseo 0.16.2 candidate
+# Personal Paseo 0.16.2 upgrade
 
-Merge upstream v0.16.2 into the maintained personal Web/daemon branch. Preserve current-tab Companion notifications, question attention, host-specific launch profiles, Project grouping and pins, Context HUD, schedule End/history, routed account usage and ACP cancellation acknowledgement.
+Upstream v0.16.2 is merged into the maintained personal Web/daemon branch. The
+accepted runtime source is 128f055aeb038f5ed9100f2e4c84518bc987247b; the immutable
+release is `0.16.2-personal-128f055ae-final`. Intelligence's
+`machine/paseo/accepted-deployment.json` owns the per-host hashes and native pins.
 
-The upstream provider-options migration now reads both profile `options` and legacy `featureValues`; it must preserve explicit Fast-off. The CLI retains the existing bare `usage` summary contract while exposing upstream usage subcommands. Existing conversation settings and native identities remain unchanged.
+Retained patches include current-tab Companion routing, question attention,
+host-specific profiles, Project grouping and pins, Context HUD, schedule End and
+history, routed account usage, ACP cancellation acknowledgement, and optional
+cache read deadlines. Profiles accept both new options and legacy featureValues,
+preserving explicit Fast-off. The bare CLI usage summary remains available.
+The focused workspace owns directory demand, including reconnect readiness;
+compact headers retain Context HUD. Desktop details use hover and compact details
+use a click/sheet. No production workspace-recovery defect was established by the
+old post-cleanup screenshot of an already deleted test workspace.
 
-Server and CLI builds and Web typecheck passed. Focused app tests passed except an initially exposed profile-options migration gap, now fixed and covered; 31 default/draft tests passed. Usage/catalog/schedule tests passed, and the ACP/account/resource suite passed 162 tests after fixing a merged test import. Browser and packaged-runtime acceptance are pending. Neither production host is switched.
+## Validation and rollout
 
-Retain runtime/launcher and state snapshots. Upstream now has idle-runtime cleanup, terminal workers, provider options and restart recovery; verify custody, background tasks, retained questions and schedule history before any rollout. Do not enable automatic recovery, new providers, model defaults or paid fallback as a migration side effect.
+Server, CLI and Web builds/typechecks passed. Focused app tests passed 164 cases,
+ACP/account/resource tests passed 162, and directory/cache tests passed 44.
+Desktop and 390px Context HUD browser acceptance passed. Actual immutable-package
+HTTP and native PTY checks passed. Both current directory plugins compiled and
+reported running in an isolated packaged daemon. Fixtures disable bundled skill
+writes and use private state; management-socket readiness follows HTTP health.
 
-The 0.16 compact header replaces the previous screen header, so the Context HUD
-is explicitly retained in its action slot. The focused workspace also owns its
-directory demand, including reconnect readiness; it must not depend on the desktop
-sidebar mounting. Optional cache read deadlines remain. A route refresh promoted
-to full demand now attaches label metadata without a duplicate directory fetch.
-All 44 directory/cache tests pass; fresh desktop/mobile browser verification is
-running against these final changes.
+All 399 copied stored records preserved identity, model, effort and Fast across
+the options migration. Native Codex 0.170 restored an old copied history with nine
+turns; the source hash was unchanged and no inference was sent. AGY 1.5 separately
+restored a copied native history with 1,297 notifications and unchanged source.
 
-Desktop and 390px browser acceptance passed. The compact details UI uses a click/sheet, while desktop uses hover; the test now checks the actual interaction. An earlier post-cleanup screenshot misleadingly showed a deleted fixture workspace and is not evidence of a workspace recovery defect.
+On November 18, Cloudtop switched first and Mactop second using independent
+external launchd jobs. Each recorded exactly one restart and new_runtime_verified.
+Cloudtop retained 356 agents and 19 schedules; Mactop retained 72 agents and zero
+schedules. Both final deployment checks passed, and both Codex catalogues advertised
+GPT-6.2 Astra/Sol. Existing model/effort/Fast, schedule identity/history and account
+routing were preserved; new automatic idle-runtime cleanup remains disabled.
+The original Cloudtop maintenance conversation resumed through actual Codex 0.170.
+Its live Chrome page retained history, Context HUD and its GPT-6 Astra selection.
+Mactop live desktop interaction remains unverified because its Computer Use endpoint
+rejected sender authentication; serving bytes, runtime ancestry and RPC passed.
+No host OS was rebooted. Mactop OS reboot remains explicitly deferred.
+
+Retain compatible runtime/launcher pairs and private metadata/native/SQLite
+snapshots. Completed one-shot jobs were unloaded; never replay their inputs.
+Inspect the owning host's saved outcome before any retry or rollback. Existing
+agent workers, account custody and durable services require the same safe-idle
+boundary for future disruptive changes. No additional paid canary is authorized.
