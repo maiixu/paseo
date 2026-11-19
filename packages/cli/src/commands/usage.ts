@@ -28,20 +28,23 @@ const schema: OutputSchema<Summary> = {
         );
     }
     lines.push(
-      "Account allowance reads general windows only; [model]/[surface] windows are reported separately.",
+      "General windows apply to all models; --model includes that model’s matching windows.",
     );
     lines.push("Allowance is not authorization or execution admission; windows are not pooled.");
     return lines.join("\n");
   },
 };
 export async function runUsageCommand(
-  options: CommandOptions & { agent?: string },
+  options: CommandOptions & { agent?: string; model?: string },
   _command: Command,
 ): Promise<SingleResult<Summary>> {
   const client = await connectToDaemon({ target: options.daemonTarget });
   try {
-    const usage = await client.listProviderUsage({ agentId: options.agent });
-    return { type: "single", data: summarizeUsage(usage), schema };
+    const usage = await client.listProviderUsage({
+      agentId: options.agent,
+      includeAntigravity: true,
+    });
+    return { type: "single", data: summarizeUsage(usage, { model: options.model }), schema };
   } finally {
     await client.close();
   }

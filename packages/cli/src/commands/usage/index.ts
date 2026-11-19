@@ -73,7 +73,9 @@ function addListOptions(command: Command): Command {
 }
 
 export function createUsageCommand(): Command {
-  const usage = addListOptions(new Command("usage").description("Show account usage reports"));
+  const usage = addListOptions(
+    new Command("usage").description("Show account usage reports"),
+  ).option("--model <id>", "Include windows for this model in the planning summary");
   const list = (options: CommandOptions, _command: Command) =>
     runUsageCommand(options, { kind: "list" });
   usage.action(withOutput(list));

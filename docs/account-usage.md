@@ -85,3 +85,10 @@ authorize another provider, paid overage or history migration.
 
 Account admission, safe switching and custody remain owned by the router. The
 usage command and tool only observe them.
+
+When the Antigravity usage plugin is enabled, the planning summary also reads
+its quota reports. A Codex conversation sees the host's default Antigravity
+login; an Antigravity conversation queries its own session. Reports keep the
+plugin observation time. A `models:<id>,<id>` window represents a single
+observation for the listed models. Specify the exact model ID with
+`paseo usage --model <id> --json` or `get_usage(model=...)` to evaluate it.

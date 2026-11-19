@@ -1979,6 +1979,7 @@ export const ProviderDiagnosticRequestMessageSchema = z.object({
 
 export const ProviderUsageListRequestMessageSchema = z.object({
   type: z.literal("provider.usage.list.request"),
+  includeAntigravity: z.boolean().optional(),
   requestId: z.string(),
   agentId: z.string().optional(),
   // Bypass the daemon's provider-usage and per-account caches. Older daemons ignore it.

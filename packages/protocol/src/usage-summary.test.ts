@@ -283,3 +283,68 @@ it("matches model windows by id key or legacy label", () => {
   expect(windowLimitsModel({ id: "weekly", label: "Weekly" }, "sonnet")).toBe(false);
   expect(windowLimitsModel({ id: "weekly_model_sonnet", label: "x" }, null)).toBe(false);
 });
+
+it("counts a shared Antigravity observation once and matches only exact models", () => {
+  const agy = {
+    ...source,
+    providerId: "antigravity",
+    windows: [
+      {
+        id: "models:gemini-carbon,gemini-neon",
+        label: "Gemini",
+        remainingPct: 0,
+      },
+      { id: "models:claude-opus", label: "Opus", remainingPct: 100 },
+      { id: "models:gemini-unknown", label: "Unknown", remainingPct: null },
+    ],
+  };
+  const forModel = (model?: string) =>
+    summarizeUsage({ fetchedAt: fresh, providers: [agy] }, { now, model }).resources[0]!;
+  expect(forModel().allowance).toBe("unknown");
+  expect(forModel("gemini-neon").allowance).toBe("exhausted");
+  expect(forModel("claude-opus").allowance).toBe("remaining");
+  expect(forModel("gemini").allowance).toBe("unknown");
+  expect(forModel("gemini-unknown").allowance).toBe("unknown");
+  expect(forModel("gemini-neon").scoped.filter((w) => w.appliesToModel)).toHaveLength(1);
+});
+
+it("separates an exact Google Opus alias from native Claude's family window", () => {
+  const usage = {
+    fetchedAt: fresh,
+    providers: [
+      {
+        ...source,
+        providerId: "antigravity",
+        windows: [{ id: "models:claude-opus-5-5-medium", label: "Google Opus", remainingPct: 85 }],
+      },
+      {
+        ...source,
+        providerId: "claude",
+        windows: [
+          { id: "weekly", label: "Weekly", remainingPct: 50 },
+          { id: "weekly_model_opus", label: "Weekly Opus", remainingPct: 0 },
+        ],
+      },
+    ],
+  };
+  const summary = (model: string) => summarizeUsage(usage, { now, model }).resources;
+  expect(summary("claude-opus-5-5-medium").map((r) => r.allowance)).toEqual([
+    "remaining",
+    "remaining",
+  ]);
+  expect(summary("claude-opus-5-5").map((r) => r.allowance)).toEqual(["unknown", "exhausted"]);
+  expect(summary("claude-opus-5-5-medium")[1]?.scoped[0]?.appliesToModel).toBe(false);
+});
+
+it("does not present a legacy AGY Argon summary as a Neon quota", () => {
+  const agy = {
+    ...source,
+    providerId: "antigravity",
+    windows: [{ id: "5h-gemini", label: "Argon", remainingPct: 98 }],
+  };
+  const summary = summarizeUsage(
+    { fetchedAt: fresh, providers: [agy] },
+    { now, model: "gemini-4-neon-medium" },
+  );
+  expect(summary.resources[0]?.allowance).toBe("unknown");
+});

@@ -1,7 +1,8 @@
 import type { Logger } from "pino";
+import { withTimeout } from "../../utils/promise-timeout.js";
 import { AccountRouterUsage } from "./account-router.js";
 import type { ProviderUsageListResponseMessage } from "../../server/messages.js";
-import type { ProviderUsage } from "../../server/messages.js";
+import type { ProviderUsage, UsageReportEntry } from "../../server/messages.js";
 import { createProviderUsageFetchers } from "./manifest.js";
 import type { ProviderApiFetch, ProviderUsageFetcher } from "./provider.js";
 import { MIN_FORCED_REFRESH_INTERVAL_MS, unavailableUsage } from "./usage.js";
@@ -12,6 +13,12 @@ import { MIN_FORCED_REFRESH_INTERVAL_MS, unavailableUsage } from "./usage.js";
  */
 export interface UsageSourceEnablement {
   isEnabled(sourceId: string): boolean;
+  agentProvider?(agentId: string): string | undefined;
+  listAntigravity?(options: {
+    sourceId: "antigravity";
+    agentId?: string;
+    forceRefresh?: boolean;
+  }): Promise<UsageReportEntry[]>;
 }
 
 export interface ProviderUsageServiceOptions {
@@ -72,6 +79,79 @@ export class ProviderUsageService {
   }
 
   async listUsage(options?: {
+    includeAntigravity?: boolean;
+    forceRefresh?: boolean;
+    agentId?: string;
+  }): Promise<ProviderUsageListResult> {
+    if (!options?.includeAntigravity) return this.listBuiltInUsage(options);
+    const [builtIn, agy] = await Promise.all([
+      this.listBuiltInUsage(options),
+      this.readAntigravity(options?.agentId, options?.forceRefresh),
+    ]);
+    return agy ? { ...builtIn, providers: [...builtIn.providers, agy] } : builtIn;
+  }
+
+  private async readAntigravity(
+    agentId?: string,
+    forceRefresh?: boolean,
+  ): Promise<ProviderUsage | null> {
+    const base = {
+      providerId: "antigravity",
+      displayName: "Antigravity",
+      planLabel: null,
+      windows: [],
+    };
+    if (!this.usageSources.listAntigravity) return null;
+    if (!this.usageSources.isEnabled(base.providerId))
+      return {
+        ...base,
+        status: "unavailable",
+        error: USAGE_SOURCE_DISABLED_ERROR,
+      };
+    const provider = agentId ? this.usageSources.agentProvider?.(agentId) : undefined;
+    if (agentId && !provider)
+      return { ...base, status: "unavailable", error: "Unknown agent scope" };
+    const sessionId = provider === "antigravity" ? agentId : undefined;
+    const sourceLabel = sessionId ? "agent_session" : "host_default";
+    try {
+      // Keep one slow extension inside the normal usage RPC deadline. The registry
+      // coalesces fetches and can finish warming its cache after this caller returns.
+      const reports = await withTimeout(
+        this.usageSources.listAntigravity({
+          sourceId: "antigravity",
+          agentId: sessionId,
+          forceRefresh,
+        }),
+        5000,
+        "Quota source timed out",
+      );
+      const accounts = reports
+        .filter((entry) => entry.sourceId === base.providerId)
+        .map((entry) => ({
+          providerId: base.providerId,
+          displayName: base.displayName,
+          planLabel: null,
+          accountId: entry.id,
+          sourceLabel,
+          fetchedAt: entry.fetchedAt,
+          status: entry.report.status,
+          windows: entry.report.status === "available" ? entry.report.windows : [],
+        }));
+      return {
+        ...base,
+        status: accounts.some((a) => a.status === "available") ? "available" : "unavailable",
+        accounts,
+      };
+    } catch {
+      return {
+        ...base,
+        status: "unavailable",
+        error: "Antigravity quota observation failed",
+      };
+    }
+  }
+
+  private async listBuiltInUsage(options?: {
     forceRefresh?: boolean;
     agentId?: string;
   }): Promise<ProviderUsageListResult> {

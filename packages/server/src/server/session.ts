@@ -575,6 +575,8 @@ export interface SessionOptions {
       input: unknown,
     ): import("./plugins/runtime-subscription.js").PluginRuntimeSubscription;
     listUsageReports(options?: {
+      sourceId?: string;
+      agentId?: string;
       forceRefresh?: boolean;
       reportIds?: string[];
     }): Promise<UsageReportEntry[]>;

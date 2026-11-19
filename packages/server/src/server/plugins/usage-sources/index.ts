@@ -36,6 +36,7 @@ export interface AgentUsageLookup {
 }
 
 export interface ListUsageReportsOptions {
+  sourceId?: string;
   forceRefresh?: boolean;
   reportIds?: string[];
   agentId?: string;
@@ -46,7 +47,19 @@ interface AgentReports {
   provider: string;
   model?: string;
   sessionKey: string;
+  partial?: boolean;
   reports: Map<string, KnownReport>;
+}
+
+function sameSession(
+  mapping: AgentReports | undefined,
+  session: AgentUsageSession,
+): mapping is AgentReports {
+  return (
+    mapping?.sessionKey === session.sessionKey &&
+    mapping.provider === session.provider &&
+    mapping.model === session.model
+  );
 }
 
 /** Owns account identity, ordered logins for each account, and the five-minute fetch cache. */
@@ -99,10 +112,22 @@ export class UsageSourceRegistry {
     let ids: string[];
     let reports = this.known;
     if (options.agentId !== undefined) {
-      ids = await this.discoverAgent(options.agentId);
+      ids = await this.discoverAgent(options.agentId, options.sourceId);
       reports = this.byAgent.get(options.agentId)?.reports ?? new Map();
     } else if (options.reportIds !== undefined) {
       ids = options.reportIds;
+    } else if (options.sourceId !== undefined) {
+      const source = this.sources.get(options.sourceId);
+      if (!source) return [];
+      const accounts = await this.discover({ kind: "global" }, undefined, [source]);
+      if (this.sources.get(source.id) !== source) return [];
+      for (const [key, report] of this.defaults) {
+        if (report.source === source) this.defaults.delete(key);
+      }
+      for (const [key, report] of accounts) this.defaults.set(key, report);
+      this.mergeKnown();
+      reports = accounts;
+      ids = [...accounts.keys()];
     } else {
       this.defaults = await this.discover({ kind: "global" }, this.defaults);
       this.mergeKnown();
@@ -111,7 +136,7 @@ export class UsageSourceRegistry {
     return Promise.all(
       [...new Set(ids)].flatMap((id) => {
         const known = reports.get(id);
-        if (!known) return [];
+        if (!known || (options.sourceId && known.source.id !== options.sourceId)) return [];
         return [
           this.fetchId(id, known, options.forceRefresh).then((entry) => {
             options.onReport?.(entry);
@@ -129,7 +154,7 @@ export class UsageSourceRegistry {
     this.mergeKnown();
   }
 
-  private async discoverAgent(agentId: string): Promise<string[]> {
+  private async discoverAgent(agentId: string, sourceId?: string): Promise<string[]> {
     if (!this.agents.hasAgent(agentId)) throw new Error(`Unknown agent: ${agentId}`);
     const session = this.agents.usageSession(agentId);
     if (!session) {
@@ -138,23 +163,37 @@ export class UsageSourceRegistry {
       return [];
     }
     const previous = this.byAgent.get(agentId);
-    const sameScope =
-      previous?.sessionKey === session.sessionKey &&
-      previous.provider === session.provider &&
-      previous.model === session.model;
-    if (sameScope) return [...previous.reports.keys()];
-    const reports = await this.discover({
-      kind: "session",
-      provider: session.provider,
-      model: session.model,
-      env: session.env,
-    });
+    if (
+      sameSession(previous, session) &&
+      (!previous.partial ||
+        (sourceId && [...previous.reports.values()].some((r) => r.source.id === sourceId)))
+    )
+      return [...previous.reports.keys()];
+    const source = sourceId ? this.sources.get(sourceId) : undefined;
+    if (sourceId && !source) return [];
+    const reports = await this.discover(
+      {
+        kind: "session",
+        provider: session.provider,
+        model: session.model,
+        env: session.env,
+      },
+      undefined,
+      source ? [source] : undefined,
+    );
     // A query that finishes after a resume must not publish the previous launch's mapping.
     if (this.agents.usageSession(agentId)?.sessionKey !== session.sessionKey) return [];
+    const latest = this.byAgent.get(agentId);
+    if (source && sameSession(latest, session)) {
+      if (!latest.partial) return [...latest.reports.keys()];
+      for (const [key, known] of latest.reports)
+        if (known.source.id !== source.id) reports.set(key, known);
+    }
     this.byAgent.set(agentId, {
       sessionKey: session.sessionKey,
       provider: session.provider,
       model: session.model,
+      partial: Boolean(source),
       reports,
     });
     this.mergeKnown();
@@ -199,9 +238,10 @@ export class UsageSourceRegistry {
   private async discover(
     scope: UsageScope,
     previous: ReadonlyMap<string, KnownReport> = new Map(),
+    sources: Iterable<UsageSource> = this.sources.values(),
   ): Promise<Map<string, KnownReport>> {
     const discovered = await Promise.all(
-      [...this.sources.values()].map(async (source) => {
+      [...sources].map(async (source) => {
         const reports = new Map<string, KnownReport>();
         try {
           const accounts = z

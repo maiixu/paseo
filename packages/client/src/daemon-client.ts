@@ -6231,6 +6231,7 @@ export class DaemonClient {
   }
 
   async listProviderUsage(options?: {
+    includeAntigravity?: boolean;
     requestId?: string;
     agentId?: string;
     forceRefresh?: boolean;
@@ -6239,6 +6240,7 @@ export class DaemonClient {
       requestId: options?.requestId,
       message: {
         type: "provider.usage.list.request",
+        ...(options?.includeAntigravity ? { includeAntigravity: true } : {}),
         ...(options?.agentId ? { agentId: options.agentId } : {}),
         ...(options?.forceRefresh ? { forceRefresh: true } : {}),
       },

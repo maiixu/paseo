@@ -532,6 +532,7 @@ export class ProviderCatalogSession {
   ): Promise<void> {
     try {
       const usage = await this.providerUsageService.listUsage({
+        ...(msg.includeAntigravity ? { includeAntigravity: true } : {}),
         ...(msg.agentId ? { agentId: msg.agentId } : {}),
         ...(msg.forceRefresh ? { forceRefresh: true } : {}),
       });

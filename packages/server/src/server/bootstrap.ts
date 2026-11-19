@@ -1565,7 +1565,7 @@ export async function createPaseoDaemon(
     recordResourceDecision,
     getResourceUsage: async (agentId) => {
       if (!wsServer) throw new Error("Daemon is not ready");
-      return wsServer.getResourceUsage(agentId);
+      return wsServer.getResourceUsage(agentId, true);
     },
     finishSubscriptions: () => finishSubscriptions,
     agentMessages: () => {

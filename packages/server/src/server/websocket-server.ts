@@ -845,6 +845,9 @@ export class VoiceAssistantWebSocketServer {
       // skipped before any credential read or network call.
       usageSources: {
         isEnabled: (sourceId) => this.pluginRuntime?.isUsageSourceEnabled(sourceId) ?? false,
+        listAntigravity: (options) =>
+          this.pluginRuntime?.listUsageReports(options) ?? Promise.resolve([]),
+        agentProvider: (agentId) => this.agentManager.getAgent(agentId)?.config.provider,
       },
       accountRouter: {
         logger: this.logger,
@@ -860,8 +863,8 @@ export class VoiceAssistantWebSocketServer {
     this.logger.info("WebSocket server initialized on /ws");
   }
 
-  async getResourceUsage(agentId?: string) {
-    return this.providerUsageService.listUsage({ agentId });
+  async getResourceUsage(agentId?: string, includeAntigravity = false) {
+    return this.providerUsageService.listUsage({ agentId, includeAntigravity });
   }
 
   private assignOptionalServices(params: {

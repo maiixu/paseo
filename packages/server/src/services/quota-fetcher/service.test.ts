@@ -2341,3 +2341,83 @@ describe("KimiQuotaProvider usage windows", () => {
     ]);
   });
 });
+
+it("keeps AGY off passive reads and reports failed planning observations as unavailable", async () => {
+  const listAntigravity = vi.fn().mockRejectedValue(new Error("private diagnostic"));
+  const service = new ProviderUsageService({
+    logger: createLogger(),
+    fetchers: [],
+    usageSources: {
+      isEnabled: () => true,
+      agentProvider: (id) => (id === "planning" ? "codex" : undefined),
+      listAntigravity,
+    },
+  });
+  await service.listUsage({ agentId: "ordinary" });
+  expect(listAntigravity).not.toHaveBeenCalled();
+  const result = await service.listUsage({
+    agentId: "planning",
+    includeAntigravity: true,
+  });
+  expect(listAntigravity).toHaveBeenCalledWith({
+    sourceId: "antigravity",
+    agentId: undefined,
+    forceRefresh: undefined,
+  });
+  expect(result.providers[0]).toMatchObject({
+    providerId: "antigravity",
+    status: "unavailable",
+    windows: [],
+  });
+  expect(JSON.stringify(result)).not.toContain("private diagnostic");
+});
+
+it("keeps an unresolved AGY agent unknown and preserves the observation's account, time and scope", async () => {
+  const stamp = "2026-11-18T03:00:00Z";
+  const listAntigravity = vi.fn(async (options: { agentId?: string }) =>
+    options.agentId
+      ? []
+      : [
+          {
+            id: "antigravity:opaque",
+            sourceId: "antigravity",
+            sourceLabel: "Antigravity",
+            account: {},
+            fetchedAt: stamp,
+            report: {
+              status: "available" as const,
+              windows: [{ id: "models:neon", label: "Neon", remainingPct: 42 }],
+            },
+          },
+        ],
+  );
+  const service = new ProviderUsageService({
+    logger: createLogger(),
+    fetchers: [],
+    usageSources: {
+      isEnabled: () => true,
+      agentProvider: (id) => (id === "agy" ? "antigravity" : undefined),
+      listAntigravity,
+    },
+  });
+  expect(
+    (await service.listUsage({ agentId: "missing", includeAntigravity: true })).providers[0]
+      ?.status,
+  ).toBe("unavailable");
+  expect(listAntigravity).not.toHaveBeenCalled();
+  expect(
+    (await service.listUsage({ agentId: "agy", includeAntigravity: true })).providers[0]?.accounts,
+  ).toEqual([]);
+  expect(listAntigravity).toHaveBeenLastCalledWith({
+    sourceId: "antigravity",
+    agentId: "agy",
+    forceRefresh: undefined,
+  });
+  expect(
+    (await service.listUsage({ includeAntigravity: true })).providers[0]?.accounts?.[0],
+  ).toMatchObject({
+    sourceLabel: "host_default",
+    accountId: "antigravity:opaque",
+    fetchedAt: stamp,
+  });
+});

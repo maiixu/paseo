@@ -23,7 +23,9 @@ const MODEL_LABEL = /^weekly\s*[-·:]\s*\S/i;
 
 export function windowScope(window: Pick<UsageWindow, "id" | "label">): UsageWindowScope {
   if (SURFACE_ID.test(window.id) || SURFACE_SCOPED_ID.test(window.id)) return "surface";
-  if (MODEL_ID.test(window.id) || MODEL_LABEL.test(window.label)) return "model";
+  if (window.id.startsWith("models:") || MODEL_ID.test(window.id) || MODEL_LABEL.test(window.label))
+    return "model";
+
   return "general";
 }
 
@@ -70,6 +72,8 @@ export function windowLimitsModel(
   model: string | null | undefined,
 ): boolean {
   if (!model || windowScope(window) !== "model") return false;
+  if (window.id.startsWith("models:"))
+    return window.id.slice("models:".length).split(",").includes(model);
   const key = MODEL_ID.test(window.id)
     ? window.id.replace(MODEL_ID, "")
     : window.label.replace(/^weekly\s*[-·:]\s*/i, "");
@@ -90,6 +94,17 @@ export interface SummarizeUsageOptions {
 export function summarizeUsage(usage: Usage, options: SummarizeUsageOptions = {}) {
   const now = options.now ?? Date.now();
   const model = options.model ?? null;
+  // AGY also advertises Claude aliases with effort suffixes. An exact plugin model
+  // must not pull the native Claude account's fuzzy family window into admission.
+  const agyModel =
+    model &&
+    usage.providers.some(
+      (p) =>
+        p.providerId === "antigravity" &&
+        (p.accounts ?? [p]).some((a) =>
+          a.windows.some((w) => w.id.startsWith("models:") && windowLimitsModel(w, model)),
+        ),
+    );
   const resources = usage.providers.flatMap((provider) => {
     // Empty account windows must not inherit the aggregate provider allowance.
     const accounts = [...(provider.accounts ?? [provider])];
@@ -118,7 +133,10 @@ export function summarizeUsage(usage: Usage, options: SummarizeUsageOptions = {}
       // Admission reads general windows, plus the model windows of the requested model. A
       // spent code-review or other-model window does not refuse ordinary work, and a missing
       // value there does not make the account unknown; those are reported in `scoped`.
-      const admission = windows.filter((w) => w.scope === "general" || windowLimitsModel(w, model));
+      const effectiveModel = agyModel && provider.providerId !== "antigravity" ? null : model;
+      const admission = windows.filter(
+        (w) => w.scope === "general" || windowLimitsModel(w, effectiveModel),
+      );
       const scoped = windows
         .filter((w) => w.scope !== "general")
         .map((w) => ({
@@ -128,14 +146,16 @@ export function summarizeUsage(usage: Usage, options: SummarizeUsageOptions = {}
           allowance: w.allowance,
           remainingPct: w.remainingPct,
           resetsAt: w.resetsAt,
-          appliesToModel: windowLimitsModel(w, model),
+          appliesToModel: windowLimitsModel(w, effectiveModel),
         }));
       let allowance: UsageAllowance = "unknown";
       let reason = "missing_or_invalid_windows";
       if (!fresh) reason = "stale_or_invalid_timestamp";
       else if (account.status !== "available") reason = "observation_unavailable";
       else if (
-        admission.some((w) => w.scope === "general") &&
+        (provider.providerId === "antigravity"
+          ? admission.some((w) => w.id.startsWith("models:") && windowLimitsModel(w, model))
+          : admission.some((w) => w.scope === "general")) &&
         admission.every((w) => w.allowance !== "unknown")
       ) {
         const exhausted = admission.some((w) => w.allowance === "exhausted");
@@ -148,6 +168,11 @@ export function summarizeUsage(usage: Usage, options: SummarizeUsageOptions = {}
       return {
         provider: provider.providerId,
         account: accountId,
+        observationScope:
+          provider.providerId === "antigravity" &&
+          ["host_default", "agent_session"].includes(account.sourceLabel ?? "")
+            ? account.sourceLabel
+            : undefined,
         fetchedAt,
         ageSeconds: fresh ? Math.floor(age / 1000) : null,
         allowance,

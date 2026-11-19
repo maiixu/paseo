@@ -828,3 +828,59 @@ test("failed discovery preserves history until discovery confirms account remova
   present = true;
   expect((await registry.listReports())[0]?.lastSuccessful).toBeUndefined();
 });
+
+test("planning can read one global source without touching other logins or evicting their reports", async () => {
+  const registry = new UsageSourceRegistry();
+  let discoveries = 0;
+  registry.register(
+    source({
+      id: "other",
+      discover: async () => {
+        discoveries++;
+        return [{ key: "b", input: {} }];
+      },
+    }),
+  );
+  registry.register(
+    source({
+      id: "antigravity",
+      discover: async () => [{ key: "a", input: {} }],
+    }),
+  );
+  expect((await registry.listReports({ sourceId: "antigravity" })).map((r) => r.id)).toEqual([
+    "antigravity:a",
+  ]);
+  expect(discoveries).toBe(0);
+  await registry.listReports();
+  await registry.listReports({ sourceId: "antigravity" });
+  expect((await registry.listReports({ reportIds: ["other:b"] })).map((r) => r.id)).toEqual([
+    "other:b",
+  ]);
+});
+
+test("an AGY-only session query leaves ordinary full discovery intact", async () => {
+  const registry = new UsageSourceRegistry(Date.now, 300_000, undefined, {
+    hasAgent: () => true,
+    usageSession: () => ({ provider: "antigravity", sessionKey: "session", env: {} }),
+  });
+  let otherReads = 0;
+  registry.register(
+    source({
+      id: "other",
+      discover: async () => {
+        otherReads++;
+        return [{ key: "other", input: {} }];
+      },
+    }),
+  );
+  registry.register(
+    source({ id: "antigravity", discover: async () => [{ key: "session", input: {} }] }),
+  );
+  const only = await registry.listReports({ sourceId: "antigravity", agentId: "agent" });
+  expect(only.map((r) => r.id)).toEqual(["antigravity:session"]);
+  expect(otherReads).toBe(0);
+  expect((await registry.listReports({ agentId: "agent" })).map((r) => r.id).sort()).toEqual([
+    "antigravity:session",
+    "other:other",
+  ]);
+});
