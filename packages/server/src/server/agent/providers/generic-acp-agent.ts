@@ -30,6 +30,7 @@ interface GenericACPAgentClientOptions {
   configFeatureOptions?: ACPConfigFeatureOption[];
   extensionCommandsParser?: ACPExtensionCommandsParser;
   catalogModelResolver?: ACPCatalogModelResolver;
+  preferConfigOptionModels?: boolean;
   now?: () => number;
 }
 
@@ -57,6 +58,7 @@ export class GenericACPAgentClient extends ACPAgentClient {
       configFeatureOptions: options.configFeatureOptions,
       extensionCommandsParser: options.extensionCommandsParser,
       catalogModelResolver: options.catalogModelResolver,
+      preferConfigOptionModels: options.preferConfigOptionModels,
       now: options.now,
     });
 

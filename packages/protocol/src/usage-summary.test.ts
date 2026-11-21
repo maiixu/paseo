@@ -336,6 +336,40 @@ it("separates an exact Google Opus alias from native Claude's family window", ()
   expect(summary("claude-opus-5-5-medium")[1]?.scoped[0]?.appliesToModel).toBe(false);
 });
 
+it("matches grouped Antigravity Gemini family IDs without matching prefixes or native Claude", () => {
+  const usage = {
+    fetchedAt: fresh,
+    providers: [
+      {
+        ...source,
+        providerId: "antigravity",
+        windows: [
+          {
+            id: "models:gemini-4-neon-low,gemini-4-neon-medium,gemini-4-neon-high,gemini-4-neon-xhigh",
+            label: "gemini-4-neon",
+            remainingPct: 80,
+          },
+          {
+            id: "models:claude-opus-5-5-medium",
+            label: "claude-opus-5-5",
+            remainingPct: 90,
+          },
+        ],
+      },
+    ],
+  };
+  expect(summarizeUsage(usage, { now, model: "gemini-4-neon" }).resources[0]?.allowance).toBe(
+    "remaining",
+  );
+  expect(summarizeUsage(usage, { now, model: "gemini-4-neon-high" }).resources[0]?.allowance).toBe(
+    "remaining",
+  );
+  expect(summarizeUsage(usage, { now, model: "gemini-4" }).resources[0]?.allowance).toBe("unknown");
+  expect(summarizeUsage(usage, { now, model: "claude-opus-5-5" }).resources[0]?.allowance).toBe(
+    "unknown",
+  );
+});
+
 it("does not present a legacy AGY Argon summary as a Neon quota", () => {
   const agy = {
     ...source,

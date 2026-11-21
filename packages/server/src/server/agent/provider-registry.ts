@@ -36,6 +36,7 @@ import type {
 import { ClaudeAgentClient } from "./providers/claude/agent.js";
 import { CodexAppServerAgentClient } from "./providers/codex-app-server-agent.js";
 import { CopilotACPAgentClient } from "./providers/copilot-acp-agent.js";
+import { AntigravityACPAgentClient } from "./providers/antigravity-acp-agent.js";
 import { CursorACPAgentClient } from "./providers/cursor-acp-agent.js";
 import { GenericACPAgentClient } from "./providers/generic-acp-agent.js";
 import { KimiACPAgentClient } from "./providers/kimi-acp-agent.js";
@@ -856,6 +857,9 @@ function addDerivedProviders(
             providerId,
             label: override.label ?? providerId,
           };
+          if (providerId === "antigravity") {
+            return new AntigravityACPAgentClient(acpOptions);
+          }
           if (providerId === "cursor") {
             return new CursorACPAgentClient(acpOptions);
           }

@@ -72,8 +72,21 @@ export function windowLimitsModel(
   model: string | null | undefined,
 ): boolean {
   if (!model || windowScope(window) !== "model") return false;
-  if (window.id.startsWith("models:"))
-    return window.id.slice("models:".length).split(",").includes(model);
+  if (window.id.startsWith("models:")) {
+    const reported = window.id.slice("models:".length).split(",");
+    if (reported.includes(model)) return true;
+    // Grouped Antigravity ACP 1.5+ Gemini family IDs (e.g. `gemini-4-neon`) match
+    // reported effort-variant quota entries (`gemini-4-neon-{low,medium,high,xhigh}`),
+    // while bare `claude-*` IDs stay reserved for native Claude windows.
+    if (model.startsWith("gemini-") && !/-(low|medium|high|xhigh)$/.test(model)) {
+      return reported.some(
+        (id) =>
+          /-(low|medium|high|xhigh)$/.test(id) &&
+          id.replace(/-(low|medium|high|xhigh)$/, "") === model,
+      );
+    }
+    return false;
+  }
   const key = MODEL_ID.test(window.id)
     ? window.id.replace(MODEL_ID, "")
     : window.label.replace(/^weekly\s*[-·:]\s*/i, "");

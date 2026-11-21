@@ -492,6 +492,7 @@ interface ACPAgentClientOptions {
   defaultCommand: [string, ...string[]];
   defaultModes?: AgentMode[];
   catalogModelResolver?: ACPCatalogModelResolver;
+  preferConfigOptionModels?: boolean;
   modelTransformer?: (models: AgentModelDefinition[]) => AgentModelDefinition[];
   sessionResponseTransformer?: (response: SessionStateResponse) => SessionStateResponse;
   configOptionsTransformer?: (configOptions: SessionConfigOption[]) => SessionConfigOption[];
@@ -524,6 +525,7 @@ interface ACPAgentSessionOptions {
   runtimeSettings?: ProviderRuntimeSettings;
   defaultCommand: [string, ...string[]];
   defaultModes: AgentMode[];
+  preferConfigOptionModels?: boolean;
   modelTransformer?: (models: AgentModelDefinition[]) => AgentModelDefinition[];
   sessionResponseTransformer?: (response: SessionStateResponse) => SessionStateResponse;
   configOptionsTransformer?: (configOptions: SessionConfigOption[]) => SessionConfigOption[];
@@ -838,10 +840,15 @@ export function deriveModelDefinitionsFromACP(
   provider: string,
   models: SessionModelState | null | undefined,
   configOptions?: SessionConfigOption[] | null,
+  options?: { preferConfigOptionModels?: boolean },
 ): AgentModelDefinition[] {
   const sessionThinking = deriveSessionThinking(configOptions);
+  const modelOptions = deriveSelectorOptions(configOptions, "model");
 
-  if (models?.availableModels?.length) {
+  if (
+    models?.availableModels?.length &&
+    !(options?.preferConfigOptionModels && modelOptions.length > 0)
+  ) {
     return models.availableModels.map((model) => {
       const isDefault = model.modelId === models.currentModelId;
       const thinking = deriveACPModelThinking({
@@ -861,7 +868,6 @@ export function deriveModelDefinitionsFromACP(
     });
   }
 
-  const modelOptions = deriveSelectorOptions(configOptions, "model");
   return modelOptions.map((option) => {
     const thinking = deriveACPModelThinking({
       metadata: option.metadata,
@@ -1055,6 +1061,7 @@ export class ACPAgentClient implements AgentClient {
   protected readonly defaultCommand: [string, ...string[]];
   protected readonly defaultModes: AgentMode[];
   private readonly catalogModelResolver?: ACPCatalogModelResolver;
+  private readonly preferConfigOptionModels: boolean;
   private readonly modelTransformer?: (models: AgentModelDefinition[]) => AgentModelDefinition[];
   private readonly sessionResponseTransformer?: (
     response: SessionStateResponse,
@@ -1098,6 +1105,7 @@ export class ACPAgentClient implements AgentClient {
     this.defaultCommand = options.defaultCommand;
     this.defaultModes = options.defaultModes ?? [];
     this.catalogModelResolver = options.catalogModelResolver;
+    this.preferConfigOptionModels = options.preferConfigOptionModels ?? false;
     this.modelTransformer = options.modelTransformer;
     this.sessionResponseTransformer = options.sessionResponseTransformer;
     this.configOptionsTransformer = options.configOptionsTransformer;
@@ -1131,6 +1139,7 @@ export class ACPAgentClient implements AgentClient {
         runtimeSettings: this.runtimeSettings,
         defaultCommand: this.defaultCommand,
         defaultModes: this.defaultModes,
+        preferConfigOptionModels: this.preferConfigOptionModels,
         modelTransformer: this.modelTransformer,
         sessionResponseTransformer: this.sessionResponseTransformer,
         configOptionsTransformer: this.configOptionsTransformer,
@@ -1189,6 +1198,7 @@ export class ACPAgentClient implements AgentClient {
       runtimeSettings: this.runtimeSettings,
       defaultCommand: this.defaultCommand,
       defaultModes: this.defaultModes,
+      preferConfigOptionModels: this.preferConfigOptionModels,
       modelTransformer: this.modelTransformer,
       sessionResponseTransformer: this.sessionResponseTransformer,
       configOptionsTransformer: this.configOptionsTransformer,
@@ -1282,6 +1292,7 @@ export class ACPAgentClient implements AgentClient {
         this.provider,
         transformed.models,
         transformed.configOptions,
+        { preferConfigOptionModels: this.preferConfigOptionModels },
       );
       const models = this.catalogModelResolver
         ? await runProviderRefreshActivity(context, "catalog.resolve", () =>
@@ -1743,6 +1754,7 @@ export class ACPAgentClient implements AgentClient {
           this.provider,
           transformed.models,
           transformed.configOptions,
+          { preferConfigOptionModels: this.preferConfigOptionModels },
         );
         const modeInfo = deriveModesFromACP(
           this.defaultModes,
@@ -1836,6 +1848,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   private readonly runtimeSettings?: ProviderRuntimeSettings;
   private readonly defaultCommand: [string, ...string[]];
   private readonly defaultModes: AgentMode[];
+  private readonly preferConfigOptionModels: boolean;
   protected readonly modelTransformer?: (models: AgentModelDefinition[]) => AgentModelDefinition[];
   private readonly sessionResponseTransformer?: (
     response: SessionStateResponse,
@@ -1920,6 +1933,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     this.runtimeSettings = options.runtimeSettings;
     this.defaultCommand = options.defaultCommand;
     this.defaultModes = options.defaultModes;
+    this.preferConfigOptionModels = options.preferConfigOptionModels ?? false;
     this.modelTransformer = options.modelTransformer;
     this.sessionResponseTransformer = options.sessionResponseTransformer;
     this.configOptionsTransformer = options.configOptionsTransformer;
@@ -2439,7 +2453,9 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       throw new Error("ACP session not initialized");
     }
 
-    if (selection.hasAvailableModels && !selection.availableModel) {
+    const useConfigOptionModel = this.preferConfigOptionModels && Boolean(selection.configOption);
+
+    if (!useConfigOptionModel && selection.hasAvailableModels && !selection.availableModel) {
       this.warnInvalidSelection(
         modelId,
         `is not a valid ${this.provider} model. Available options: ${this.availableModels
@@ -2450,6 +2466,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     }
 
     if (
+      !useConfigOptionModel &&
       selection.availableModel &&
       typeof this.connection.unstable_setSessionModel === "function"
     ) {
@@ -2474,7 +2491,10 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     if (!modelOption) {
       throw new Error(this.modelSelectionUnavailableMessage());
     }
-    if (!selection.configChoice) {
+    const isValidConfigModel = Boolean(
+      selection.configChoice || (useConfigOptionModel && selection.availableModel),
+    );
+    if (!isValidConfigModel) {
       this.warnInvalidSelection(
         modelId,
         `is not a valid ${this.provider} model config option. Available options: ${flattenSelectOptions(
@@ -2502,12 +2522,25 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       requestedValue: modelId,
       label: "model",
     });
+    const nextThinkingOptionId = deriveCurrentConfigValue(this.configOptions, "thought_level");
+    const thinkingChanged =
+      nextThinkingOptionId !== null && nextThinkingOptionId !== this.thinkingOptionId;
+    if (nextThinkingOptionId !== null) {
+      this.thinkingOptionId = nextThinkingOptionId;
+    }
     this.reportFeatureChanges(before);
     this.pushEvent({
       type: "model_changed",
       provider: this.provider,
       runtimeInfo: this.runtimeInfo(),
     });
+    if (thinkingChanged) {
+      this.pushEvent({
+        type: "thinking_option_changed",
+        provider: this.provider,
+        thinkingOptionId: this.thinkingOptionId,
+      });
+    }
   }
 
   async setThinkingOption(thinkingOptionId: string | null): Promise<void> {
@@ -3221,8 +3254,10 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     this.currentMode = modeInfo.currentModeId ?? this.currentMode;
 
     this.availableModels = transformed.models?.availableModels ?? null;
-    this.currentModel =
-      transformed.models?.currentModelId ?? deriveCurrentConfigValue(this.configOptions, "model");
+    const configModel = deriveCurrentConfigValue(this.configOptions, "model");
+    this.currentModel = this.preferConfigOptionModels
+      ? (configModel ?? transformed.models?.currentModelId ?? null)
+      : (transformed.models?.currentModelId ?? configModel);
     this.thinkingOptionId =
       deriveCurrentConfigValue(this.configOptions, "thought_level") ?? this.thinkingOptionId;
   }
