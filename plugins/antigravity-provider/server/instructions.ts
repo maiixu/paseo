@@ -27,7 +27,9 @@ function expandLeadingTilde(inputPath: string, homeDir: string): string {
 }
 
 function resolveGeminiHome(homeDir: string, env?: Record<string, string>): string {
-  const configured = env?.GEMINI_HOME?.trim();
+  const configured = (
+    env?.GEMINI_HOME ?? (env?.HOME ? undefined : process.env.GEMINI_HOME)
+  )?.trim();
   if (configured) {
     return path.resolve(expandLeadingTilde(configured, homeDir));
   }

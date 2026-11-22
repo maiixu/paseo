@@ -2786,10 +2786,27 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     this.cancelPendingPermissions();
 
     if (this.activeForegroundTurnId) {
+      const connection = this.connection;
       const prompt = this.activePrompt;
-      await this.connection.cancel({ sessionId: this.sessionId });
-      // ACP cancel is a notification. Wait for the provider to settle the prompt.
-      await prompt;
+      await connection.cancel({ sessionId: this.sessionId });
+      // ACP cancel is a notification. Wait for the provider to settle the prompt,
+      // unless the connection aborts first (the SDK does not reject pending prompts on disconnect).
+      if (prompt && !connection.signal.aborted) {
+        let onAbort: (() => void) | undefined;
+        try {
+          await Promise.race([
+            prompt,
+            new Promise<void>((resolve) => {
+              onAbort = () => resolve();
+              connection.signal.addEventListener("abort", onAbort, { once: true });
+            }),
+          ]);
+        } finally {
+          if (onAbort) {
+            connection.signal.removeEventListener("abort", onAbort);
+          }
+        }
+      }
     }
   }
 

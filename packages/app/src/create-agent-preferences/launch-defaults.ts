@@ -9,9 +9,24 @@ export const DEFAULT_LAUNCH_SERVER_ID =
 export const DEFAULT_LAUNCH_PROFILE_ID =
   process.env.EXPO_PUBLIC_PASEO_DEFAULT_PROFILE_ID?.trim() || null;
 
+function parseHostLaunchProfileIds(raw: string | undefined): Record<string, string> {
+  if (!raw) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed).filter(
+        (entry): entry is [string, string] => typeof entry[1] === "string",
+      ),
+    );
+  } catch {
+    return {};
+  }
+}
+
 // A model default belongs to the selected host, independently of the Hub host.
-const HOST_LAUNCH_PROFILE_IDS: Record<string, string> = JSON.parse(
-  process.env.EXPO_PUBLIC_PASEO_HOST_PROFILE_IDS || "{}",
+const HOST_LAUNCH_PROFILE_IDS: Record<string, string> = parseHostLaunchProfileIds(
+  process.env.EXPO_PUBLIC_PASEO_HOST_PROFILE_IDS,
 );
 
 export function resolveHostLaunchProfileId(

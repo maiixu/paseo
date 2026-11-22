@@ -3875,6 +3875,26 @@ describe("ACPAgentSession", () => {
     await session.close();
   });
 
+  test("interrupt returns when the ACP connection aborts without settling the prompt", async () => {
+    const session = createSession();
+    const controller = new AbortController();
+    const prompt = vi.fn(() => new Promise<PromptResponse>(() => {}));
+    const cancel = vi.fn(async () => {
+      controller.abort();
+    });
+
+    asInternals<ACPSessionInternals>(session).sessionId = "session-1";
+    asInternals<ACPSessionInternals>(session).connection = {
+      ...openPromptConnection(prompt),
+      cancel,
+      signal: controller.signal,
+    } as unknown as ClientSideConnection;
+
+    await session.startTurn("hang");
+    await session.interrupt();
+    expect(cancel).toHaveBeenCalledWith({ sessionId: "session-1" });
+  });
+
   test("startTurn converts background prompt rejections into turn_failed events", async () => {
     const session = createSession();
     const events: Array<{ type: string; turnId?: string; error?: string }> = [];

@@ -3089,6 +3089,37 @@ test("resumes a goose session saved by the generic ACP provider", async () => {
   }
 });
 
+test("resumes an antigravity session saved by the v0.16.2 generic ACP provider", async () => {
+  const logger = createTestLogger();
+  const harness = createProviderHarness();
+  const plugins = new PluginAgentClientRegistry(logger);
+  plugins.replace([{ ...harness.registration, id: "antigravity" }]);
+  const registry = buildProviderRegistry(logger, { pluginProviders: plugins.definitions() });
+  const client = registry.antigravity.createClient(logger);
+
+  try {
+    const session = await client.resumeSession(
+      {
+        provider: "antigravity",
+        sessionId: "f260e01b-0000-4000-8000-000000000001",
+        nativeHandle: "f260e01b-0000-4000-8000-000000000001",
+        metadata: {
+          provider: "acp",
+          modeId: "yolo",
+          model: "gemini-4-neon-medium",
+        },
+      },
+      { provider: "antigravity", cwd: "/tmp", modeId: "yolo", model: "gemini-4-neon-medium" },
+    );
+    expect(harness.inputs.findLast((input) => input.type === "session.open")).toMatchObject({
+      persistence: { version: 1, data: { sessionId: "f260e01b-0000-4000-8000-000000000001" } },
+    });
+    await session.close();
+  } finally {
+    await plugins.shutdown();
+  }
+});
+
 test("preserves a deferred ACP background job on steer and cancels it on explicit Stop through AgentManager", async () => {
   const logger = createTestLogger();
   const home = await mkdtemp(join(tmpdir(), "paseo-acp-deferred-daemon-"));

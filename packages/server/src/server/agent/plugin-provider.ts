@@ -2251,7 +2251,11 @@ function decodePersistence(handle: AgentPersistenceHandle): ProviderPersistence 
     return ProviderPersistenceSchema.parse(fromMetadata);
   }
   // COMPAT(gooseProvider): added in v0.17.0, remove after 2027-05-20 once legacy handles have migrated.
-  if (handle.provider === "goose" && !handle.sessionId.startsWith("plugin:")) {
+  // COMPAT(antigravityGenericAcp): added in v0.17.3 fork upgrade so v0.16.2 generic ACP handles resume cleanly.
+  if (
+    (handle.provider === "goose" || handle.provider === "antigravity") &&
+    !handle.sessionId.startsWith("plugin:")
+  ) {
     return { version: 1, data: { sessionId: handle.sessionId } };
   }
   return decodePersistenceId(handle.sessionId);
