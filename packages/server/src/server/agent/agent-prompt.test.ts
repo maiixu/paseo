@@ -378,3 +378,67 @@ test("schedule trigger identity survives the provider assigning a message ID", (
     projectAgentMessages({ type: "user_message", text, messageId: "provider-message" }),
   );
 });
+
+test("human prompts with sender metadata wrap cleanly, strip back to plain user text, and skip slash commands", () => {
+  const sender = {
+    device: "iOS app",
+    locality: "remote" as const,
+    clientType: "mobile",
+    transport: "direct" as const,
+  };
+  const wrapped = prepareAgentMessage("Check cloudtop status", undefined, "msg-1", sender);
+  expect(wrapped.messageId).toBe("msg-1");
+  expect(String(wrapped.prompt)).toBe(
+    '<paseo-system version="1" kind="user-message" message-id="msg-1" sender-device="iOS app" sender-locality="remote">\nCheck cloudtop status\n</paseo-system>',
+  );
+  expect(parseAgentMessage(String(wrapped.prompt))).toEqual({
+    id: "msg-1",
+    source: null,
+    text: "Check cloudtop status",
+    sender: { device: "iOS app", locality: "remote" },
+  });
+  expect(
+    projectAgentMessages({
+      type: "user_message",
+      text: String(wrapped.prompt),
+      messageId: "provider-msg-1",
+    }),
+  ).toEqual([
+    {
+      type: "user_message",
+      text: "Check cloudtop status",
+      messageId: "provider-msg-1",
+      clientMessageId: "msg-1",
+    },
+  ]);
+
+  expect(prepareAgentMessage("/compact", undefined, "cmd-1", sender)).toEqual({
+    prompt: "/compact",
+    messageId: "cmd-1",
+  });
+  expect(prepareAgentMessage("/goal pause", undefined, "cmd-2", sender)).toEqual({
+    prompt: "/goal pause",
+    messageId: "cmd-2",
+  });
+
+  // File paths are plain text, not slash commands.
+  const filePathPrompt = prepareAgentMessage("/tmp/build.log", undefined, "path-1", sender);
+  expect(String(filePathPrompt.prompt)).toContain('sender-device="iOS app"');
+
+  // Image-only prompts stay parseable and project back to empty user text.
+  const imageOnly = prepareAgentMessage(
+    [{ type: "image", data: "abc", mimeType: "image/png" }],
+    undefined,
+    "img-1",
+    sender,
+  );
+  expect(Array.isArray(imageOnly.prompt)).toBe(true);
+  const firstBlock = Array.isArray(imageOnly.prompt) ? imageOnly.prompt[0] : null;
+  expect(firstBlock?.type).toBe("text");
+  expect(
+    projectAgentMessages({
+      type: "user_message",
+      text: firstBlock && firstBlock.type === "text" ? firstBlock.text : "",
+    }),
+  ).toEqual([{ type: "user_message", text: "", clientMessageId: "img-1" }]);
+});

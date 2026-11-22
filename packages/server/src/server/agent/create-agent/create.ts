@@ -13,6 +13,7 @@ import type {
 import type { AgentAttachment, FirstAgentContext } from "../../messages.js";
 import type { AgentManager, CreateAgentOptions, ManagedAgent } from "../agent-manager.js";
 import type { AgentPromptInput, AgentRunOptions, AgentSessionConfig } from "../agent-sdk-types.js";
+import type { SenderClientInfo } from "../runtime-context.js";
 import type { AgentStorage } from "../agent-storage.js";
 import type { AgentOwner } from "../agent-owner.js";
 import type { ProviderSnapshotManager } from "../provider-snapshot-manager.js";
@@ -70,6 +71,7 @@ export interface CreateAgentFromSessionInput {
   background: boolean;
   initialPrompt?: string;
   source?: AgentPromptSource;
+  senderClient?: SenderClientInfo;
   clientMessageId?: string;
   outputSchema?: Record<string, unknown>;
   images?: Array<{ data: string; mimeType: string }>;
@@ -269,10 +271,11 @@ async function resolveSessionCreateAgent(
   const hasPromptContent = Array.isArray(prompt) ? prompt.length > 0 : prompt.length > 0;
   const clientMessageId = normalizeClientMessageId(input.clientMessageId);
   const runOptions: AgentRunOptions | undefined =
-    input.outputSchema || clientMessageId
+    input.outputSchema || clientMessageId || input.senderClient
       ? {
           ...(input.outputSchema ? { outputSchema: input.outputSchema } : {}),
           ...(clientMessageId ? { clientMessageId } : {}),
+          ...(input.senderClient ? { senderClient: input.senderClient } : {}),
         }
       : undefined;
   const workspaceId = input.workspaceId;

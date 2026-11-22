@@ -11,6 +11,8 @@ import {
 } from "./timeline-projection.js";
 import type { PluginLifecycle } from "../plugins/lifecycle/index.js";
 import { describeHookAgent, publishAgentStream } from "../plugins/lifecycle/index.js";
+import { composeSystemPromptParts } from "./system-prompt.js";
+import type { SenderClientInfo } from "./runtime-context.js";
 import { applyRecordPatch } from "../record-patch.js";
 import type { PluginSessionOpenRequest } from "@getpaseo/plugin/server";
 import { randomUUID } from "node:crypto";
@@ -404,6 +406,7 @@ export interface AgentManagerOptions {
   paseoToolCatalogFactory?: PaseoToolCatalogFactory;
   resolvePaseoToolPolicy?: (provider: AgentProvider) => ProviderPaseoToolsPolicy | undefined;
   appendSystemPrompt?: string;
+  runtimeSystemPrompt?: string;
   agentStreamCoalesceWindowMs?: number;
   rescueTimeouts?: AgentManagerRescueTimeouts;
   beforeSteerUnavailableFallback?: (input: {
@@ -948,6 +951,7 @@ export class AgentManager {
     provider: AgentProvider,
   ) => ProviderPaseoToolsPolicy | undefined;
   private appendSystemPrompt: string;
+  private readonly runtimeSystemPrompt: string | undefined;
   private onAgentAttention?: AgentAttentionCallback;
   private onAgentArchived?: AgentArchivedCallback;
   private onWorkspaceStateMayHaveChanged?: (params: { cwd: string }) => void;
@@ -970,6 +974,7 @@ export class AgentManager {
     this.configurePaseoTools(options);
     this.resolvePaseoToolPolicy = options.resolvePaseoToolPolicy ?? (() => undefined);
     this.appendSystemPrompt = options.appendSystemPrompt ?? "";
+    this.runtimeSystemPrompt = options.runtimeSystemPrompt;
     this.logger = options.logger.child({ module: "agent", component: "agent-manager" });
     this.rescueTimeouts = {
       reloadSessionCloseMs:
@@ -3490,7 +3495,7 @@ export class AgentManager {
       this.dispatchStream(
         agent.id,
         { type: "turn_started", provider: agent.provider, turnId },
-        { timestamp: turnStartedAt.toISOString() },
+        { timestamp: turnStartedAt.toISOString(), senderClient: options?.senderClient },
       );
       const stagedSubmittedPromptEcho = options?.clientMessageId
         ? pendingRun.stagedEvents.find(
@@ -6231,6 +6236,7 @@ export class AgentManager {
       seq?: number;
       epoch?: string;
       timestamp?: string;
+      senderClient?: SenderClientInfo;
     },
   ): void {
     if (event.type === "timeline") {
@@ -6239,6 +6245,7 @@ export class AgentManager {
         item: limitAgentTimelineItemContent(event.item),
       };
     }
+    const { senderClient, ...streamMetadata } = metadata ?? {};
     const agent = this.agents.get(agentId);
     this.logger.trace(
       {
@@ -6246,17 +6253,18 @@ export class AgentManager {
         provider: event.provider,
         sessionId: agent?.persistence?.sessionId ?? undefined,
         turnId: getAgentStreamEventTurnId(event),
-        metadata,
+        metadata: streamMetadata,
         event,
       },
       "agent.manager.dispatch_stream",
     );
-    this.dispatch({ type: "agent_stream", agentId, event, ...metadata });
+    this.dispatch({ type: "agent_stream", agentId, event, ...streamMetadata });
     if (this.pluginLifecycle && agent && !agent.internal && event.type !== "timeline") {
       publishAgentStream(
         this.pluginLifecycle,
         describeHookAgent({ ...agent, title: agent.config.title }),
         event,
+        senderClient,
       );
     }
   }
@@ -6455,7 +6463,10 @@ export class AgentManager {
   }
 
   private applyDaemonAppendSystemPrompt(config: AgentSessionConfig): AgentSessionConfig {
-    const daemonAppendSystemPrompt = this.appendSystemPrompt.trim();
+    const daemonAppendSystemPrompt = composeSystemPromptParts(
+      this.runtimeSystemPrompt,
+      this.appendSystemPrompt,
+    );
     const next = { ...config };
     delete next.daemonAppendSystemPrompt;
 

@@ -105,8 +105,26 @@ export type PluginTurnOutcome =
   | { kind: "failed"; error: { message: string; code?: string } }
   | { kind: "canceled"; reason: string };
 
+export interface PluginMessageSender {
+  /** Human-readable client surface, e.g. "iOS app", "macOS Chrome", "iPhone Safari", "CLI". */
+  device: string;
+  /** Whether the client reached the daemon locally or from a remote host/network. */
+  locality: "local" | "remote";
+  /** Protocol hello clientType ("mobile", "browser", "cli", "mcp", "hub"). */
+  clientType?: string;
+  /** WebSocket transport ("direct", "relay", "hub"). */
+  transport?: "direct" | "relay" | "hub";
+  origin?: string;
+  host?: string;
+  appVersion?: string;
+}
+
 export interface PluginHookEvents {
-  "agent.turn.before": { agent: PluginHookAgent; turnId: string | null };
+  "agent.turn.before": {
+    agent: PluginHookAgent;
+    turnId: string | null;
+    sender?: PluginMessageSender;
+  };
   "agent.turn.after": {
     agent: PluginHookAgent;
     turnId: string | null;

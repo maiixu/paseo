@@ -28,6 +28,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import type { IncomingMessage, Server as HTTPServer } from "http";
 import { join } from "path";
 import { getHostName } from "./host-name.js";
+import { describeSenderClient, type SenderClientInfo } from "./agent/runtime-context.js";
 import { randomUUID } from "node:crypto";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import type { AgentManager, AgentMetricsSnapshot } from "./agent/agent-manager.js";
@@ -187,6 +188,8 @@ interface WebSocketConnectionIdentity {
   securityMode?: SecurityMode;
   hubDaemonId?: string;
   clientId?: string;
+  clientType?: WSHelloMessage["clientType"];
+  hasBrowserHost?: boolean;
   sessionId?: string;
   appVersion?: string;
 }
@@ -486,6 +489,7 @@ interface SessionConnectionBase {
   appVersion: string | null;
   clientCapabilities: Record<string, unknown> | null;
   connectionLogger: pino.Logger;
+  lastIdentity: WebSocketConnectionIdentity;
   sockets: Set<WebSocketLike>;
 }
 
@@ -513,6 +517,7 @@ interface SocketSessionOptions {
   onBinaryMessage?: (frame: Uint8Array) => void;
   onBinaryMessageToSource?: (source: object, frame: Uint8Array) => Promise<void>;
   getTransportBufferedAmount?: (source?: object) => number | null;
+  getSenderClient?: (source?: object) => SenderClientInfo | undefined;
   onLifecycleIntent?: (intent: SessionLifecycleIntent) => void;
   hubExecutionAgents?: HubExecutionAgents;
   hubRelationships?: HubRelationshipManagement;
@@ -1619,6 +1624,7 @@ export class VoiceAssistantWebSocketServer {
 
   private createSessionConnection(params: {
     ws: WebSocketLike;
+    identity: WebSocketConnectionIdentity;
     clientId: string;
     appVersion: string | null;
     clientCapabilities: Record<string, unknown> | null;
@@ -1626,8 +1632,16 @@ export class VoiceAssistantWebSocketServer {
     lifecycle: { kind: "reconnectable" } | { kind: "ephemeral-plugin"; pluginId: string };
     admission: SessionAdmission;
   }): SessionConnection {
-    const { ws, clientId, appVersion, clientCapabilities, connectionLogger, lifecycle, admission } =
-      params;
+    const {
+      ws,
+      identity,
+      clientId,
+      appVersion,
+      clientCapabilities,
+      connectionLogger,
+      lifecycle,
+      admission,
+    } = params;
     let connection: SessionConnection | null = null;
 
     const session = this.createSocketSession({
@@ -1680,6 +1694,12 @@ export class VoiceAssistantWebSocketServer {
         }
         return maxBuffered;
       },
+      getSenderClient: (source) => {
+        const socketIdentity =
+          (source ? this.socketIdentities.get(source as WebSocketLike) : undefined) ??
+          connection?.lastIdentity;
+        return socketIdentity ? describeSenderClient(socketIdentity) : undefined;
+      },
       onLifecycleIntent: (intent) => {
         this.onLifecycleIntent?.(intent);
       },
@@ -1696,6 +1716,7 @@ export class VoiceAssistantWebSocketServer {
       appVersion,
       clientCapabilities,
       connectionLogger,
+      lastIdentity: identity,
       sockets: new Set([ws]),
     };
     connection =
@@ -1731,6 +1752,7 @@ export class VoiceAssistantWebSocketServer {
       onBinaryMessage: options.onBinaryMessage,
       onBinaryMessageToSource: options.onBinaryMessageToSource,
       getTransportBufferedAmount: options.getTransportBufferedAmount,
+      getSenderClient: options.getSenderClient,
       onLifecycleIntent: options.onLifecycleIntent,
       logger: options.connectionLogger.child({ module: "session" }),
       publishWorkspaceArchiveUpdates: (workspaceIds) => this.publishWorkspaceUpdates(workspaceIds),
@@ -1891,10 +1913,7 @@ export class VoiceAssistantWebSocketServer {
         ),
       };
     pending.admission = admitted;
-    pending.identity.clientId = clientId;
-    if (message.appVersion) {
-      pending.identity.appVersion = message.appVersion;
-    }
+    applyHelloIdentity(pending.identity, clientId, message);
     const sessionKey = sessionConnectionKey(admitted.principalId, clientId);
     const existing = pluginId ? undefined : this.externalSessionsByKey.get(sessionKey);
     if (existing) {
@@ -1906,6 +1925,7 @@ export class VoiceAssistantWebSocketServer {
     this.incrementRuntimeCounter("helloNew");
     const connection = this.createSessionConnection({
       ws,
+      identity: pending.identity,
       clientId,
       appVersion: message.appVersion ?? null,
       clientCapabilities: message.capabilities ?? null,
@@ -2054,6 +2074,7 @@ export class VoiceAssistantWebSocketServer {
     ) {
       existing.clientCapabilities = newClientCapabilities;
     }
+    existing.lastIdentity = pending.identity;
     existing.sockets.add(ws);
     this.sessions.set(ws, existing);
     pending.identity.sessionId = existing.session.getSessionId();
@@ -3201,6 +3222,19 @@ interface SocketRequestMetadata {
   origin?: string;
   userAgent?: string;
   remoteAddress?: string;
+}
+
+function applyHelloIdentity(
+  identity: WebSocketConnectionIdentity,
+  clientId: string,
+  message: WSHelloMessage,
+): void {
+  identity.clientId = clientId;
+  identity.clientType = message.clientType;
+  identity.hasBrowserHost = Boolean(message.capabilities?.[CLIENT_CAPS.browserHost]);
+  if (message.appVersion) {
+    identity.appVersion = message.appVersion;
+  }
 }
 
 function createWebSocketConnectionIdentity(

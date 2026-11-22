@@ -127,6 +127,7 @@ import {
 } from "./workspace-labels/index.js";
 
 import { AgentManager, AgentRunCancellationError } from "./agent/agent-manager.js";
+import type { SenderClientInfo } from "./agent/runtime-context.js";
 import { buildTimelinePromptIndex } from "./agent/timeline-prompt-index.js";
 import { ProviderSnapshotManager } from "./agent/provider-snapshot-manager.js";
 import type {
@@ -514,6 +515,7 @@ export interface SessionOptions {
   onBinaryMessage?: (frame: Uint8Array) => void;
   onBinaryMessageToSource?: (source: object, frame: Uint8Array) => Promise<void>;
   getTransportBufferedAmount?: (source?: object) => number | null;
+  getSenderClient?: (source?: object) => SenderClientInfo | undefined;
   getConnectedHostBufferedAmount?: () => number | null;
   onLifecycleIntent?: (intent: SessionLifecycleIntent) => void;
   publishWorkspaceArchiveUpdates?: (workspaceIds: Iterable<string>) => Promise<void>;
@@ -818,6 +820,7 @@ export class Session {
     | ((source: object, frame: Uint8Array) => Promise<void>)
     | null;
   private readonly getTransportBufferedAmount: (source?: object) => number | null;
+  private readonly getSenderClient?: (source?: object) => SenderClientInfo | undefined;
   private readonly onLifecycleIntent: ((intent: SessionLifecycleIntent) => void) | null;
   private readonly onWorkspaceArchiveUpdate: SessionOptions["publishWorkspaceArchiveUpdates"];
   private readonly onWorkspaceRecovered:
@@ -927,6 +930,7 @@ export class Session {
       onBinaryMessage,
       onBinaryMessageToSource,
       getTransportBufferedAmount,
+      getSenderClient,
       onLifecycleIntent,
       onWorkspaceRecovered,
       publishScriptStatusUpdate,
@@ -996,6 +1000,7 @@ export class Session {
       ? (source, frame) => this.observeSourceSend(() => onBinaryMessageToSource(source, frame))
       : null;
     this.getTransportBufferedAmount = getTransportBufferedAmount ?? (() => 0);
+    this.getSenderClient = getSenderClient;
     this.onLifecycleIntent = onLifecycleIntent ?? null;
     this.onWorkspaceArchiveUpdate = options.publishWorkspaceArchiveUpdates;
     this.onWorkspaceRecovered = onWorkspaceRecovered ?? null;
@@ -2755,7 +2760,7 @@ export class Session {
       this.dispatchAgentObservationMessage(msg, source) ??
       this.dispatchHubExecutionMessage(msg) ??
       this.dispatchCreationMessage(msg, source) ??
-      this.dispatchAgentLifecycleMessage(msg) ??
+      this.dispatchAgentLifecycleMessage(msg, source) ??
       this.dispatchAgentConfigMessage(msg) ??
       this.dispatchCheckoutMessage(msg) ??
       this.dispatchWorkspaceLifecycleMessage(msg) ??
@@ -3308,7 +3313,10 @@ export class Session {
     }
   }
 
-  private dispatchAgentLifecycleMessage(msg: SessionInboundMessage): Promise<void> | undefined {
+  private dispatchAgentLifecycleMessage(
+    msg: SessionInboundMessage,
+    source?: object,
+  ): Promise<void> | undefined {
     switch (msg.type) {
       case "fetch_agents_request":
         return this.handleFetchAgents(msg);
@@ -3331,11 +3339,11 @@ export class Session {
       case "project.icon.set.request":
         return this.handleProjectIconSetRequest(msg);
       case "send_agent_message_request":
-        return this.handleSendAgentMessageRequest(msg);
+        return this.handleSendAgentMessageRequest(msg, source);
       case "wait_for_finish_request":
         return this.handleWaitForFinish(msg.agentId, msg.requestId, msg.timeoutMs);
       case "create_agent_request":
-        return this.handleCreateAgentRequest(msg);
+        return this.handleCreateAgentRequest(msg, source);
       case "resume_agent_request":
         return this.handleResumeAgentRequest(msg);
       case "import_agent_request":
@@ -4631,6 +4639,9 @@ export class Session {
     const promptText = options?.spokenInput ? wrapSpokenInput(text) : text;
     const prompt = buildAgentPrompt(promptText, images, attachments);
 
+    const senderClient = runOptions?.senderClient ?? this.getSenderClient?.();
+    const effectiveRunOptions = senderClient ? { ...runOptions, senderClient } : runOptions;
+
     try {
       await sendPromptToAgent({
         agentMessages: this.agentMessages,
@@ -4639,7 +4650,7 @@ export class Session {
         agentId,
         prompt,
         messageId,
-        runOptions,
+        runOptions: effectiveRunOptions,
         // A typed or spoken message from the human answers any permission the
         // agent is blocked on.
         clearPendingPermissions: true,
@@ -4726,6 +4737,7 @@ export class Session {
   private createRequestedAgent(
     request: AgentCreateRequest,
     observer?: (snapshot: CreationSnapshot) => void,
+    source?: object,
   ): Promise<CreationSnapshot> {
     const { requestId, type: _type, subscribe: _subscribe, idempotencyKey, ...intent } = request;
     return this.creationService.create(
@@ -4748,6 +4760,7 @@ export class Session {
               { ...request, type: "create_agent_request" },
               id,
               onReady,
+              source,
             );
           } catch (error) {
             throw new WorktreeRequestError(toWorktreeWireError(error));
@@ -4771,6 +4784,7 @@ export class Session {
       const creation = await this.createRequestedAgent(
         request,
         progress ? (snapshot) => progress.emit(this.creationUpdate(snapshot)) : undefined,
+        source,
       );
       this.emitForSource(
         {
@@ -4873,6 +4887,7 @@ export class Session {
                   },
                   id,
                   onReady,
+                  source,
                 );
               }
             : undefined,
@@ -4917,14 +4932,21 @@ export class Session {
     }
   }
 
-  private async handleCreateAgentRequest(msg: CreateAgentRequestMessage): Promise<void> {
+  private async handleCreateAgentRequest(
+    msg: CreateAgentRequestMessage,
+    source?: object,
+  ): Promise<void> {
     try {
       let agent: AgentSnapshotPayload;
       if (msg.idempotencyKey !== undefined) {
         if (msg.initialPrompt !== undefined) {
           throw new Error("Idempotent creation requires sending the initial prompt separately");
         }
-        const creation = await this.createRequestedAgent({ ...msg, type: "agent.create.request" });
+        const creation = await this.createRequestedAgent(
+          { ...msg, type: "agent.create.request" },
+          undefined,
+          source,
+        );
         if (creation.error || !creation.agent)
           throw new SessionRequestError(
             creation.errorCode ?? "unknown",
@@ -4934,7 +4956,7 @@ export class Session {
         if (!record) throw new Error("Previously created agent no longer exists");
         agent = this.buildStoredAgentPayload(record);
       } else {
-        ({ agent } = await this.createSessionAgent(msg));
+        ({ agent } = await this.createSessionAgent(msg, undefined, undefined, source));
       }
       this.emit({
         type: "status",
@@ -4985,6 +5007,7 @@ export class Session {
     msg: CreateAgentRequestMessage,
     agentId?: string,
     onAgentReady?: (agent: AgentSnapshotPayload) => Promise<void>,
+    source?: object,
   ): Promise<CreatedAgent> {
     const {
       config,
@@ -5066,6 +5089,7 @@ export class Session {
           source: msg.callerAgentId
             ? { kind: "agent-message", agentId: msg.callerAgentId }
             : undefined,
+          senderClient: msg.callerAgentId ? undefined : this.getSenderClient?.(source),
           clientMessageId,
           outputSchema,
           images,
@@ -9157,6 +9181,7 @@ export class Session {
 
   private async handleSendAgentMessageRequest(
     msg: Extract<SessionInboundMessage, { type: "send_agent_message_request" }>,
+    source?: object,
   ): Promise<void> {
     const resolved = await this.resolveAgentIdentifier(msg.agentId);
     if (!resolved.ok) {
@@ -9219,6 +9244,7 @@ export class Session {
           await receipt.dispatched;
           return;
         }
+        const senderClient = this.getSenderClient?.(source);
         const result = await sendPromptToAgent({
           agentMessages: this.agentMessages,
           agentManager: this.agentManager,
@@ -9226,6 +9252,7 @@ export class Session {
           agentId,
           prompt,
           messageId: msg.messageId,
+          runOptions: senderClient ? { senderClient } : undefined,
           activeTurnBehavior: requested === "steer" ? "steer" : "interrupt",
           sessionMode: msg.sessionMode,
           clearPendingPermissions: true,

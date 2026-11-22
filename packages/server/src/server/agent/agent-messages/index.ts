@@ -5,6 +5,7 @@ export {
   prepareAgentMessage,
   projectAgentMessages,
   formatSystemNotificationPrompt,
+  isSlashCommandPrompt,
   isSystemInjectedEnvelope,
   type AgentPromptSource,
 } from "./envelope.js";

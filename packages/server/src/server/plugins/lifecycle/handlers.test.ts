@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { createPaseoApi } from "@getpaseo/client";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
-import { validateBeforeResult, PluginHookHandlers } from "./index.js";
+import { publishAgentStream, validateBeforeResult, PluginHookHandlers } from "./index.js";
 
 const paseo = createPaseoApi(
   new DaemonClient({ url: "ws://127.0.0.1:1/ws", clientId: "lifecycle-unit" }),
@@ -397,4 +397,53 @@ test("session-open instructions compose, survive old hooks, and are ignored for 
     paseo,
   );
   expect(history).not.toHaveProperty("appendSystemPrompt");
+});
+
+test("publishAgentStream includes sender metadata on agent.turn.before when provided", () => {
+  const emitted: Array<{ name: string; payload: unknown }> = [];
+  const lifecycle = {
+    emit(name: string, payload: unknown) {
+      emitted.push({ name, payload });
+    },
+  } as unknown as Parameters<typeof publishAgentStream>[0];
+  const agent = {
+    id: "agent-1",
+    workspaceId: "ws-1",
+    parentAgentId: null,
+    provider: "claude",
+    cwd: "/repo",
+    title: "Test",
+    background: false,
+    metadata: {},
+  };
+  const sender = {
+    device: "macOS Chrome",
+    locality: "remote" as const,
+    clientType: "mobile",
+    transport: "direct" as const,
+    host: "cloudtop.tail10f85a.ts.net",
+  };
+
+  publishAgentStream(
+    lifecycle,
+    agent,
+    { type: "turn_started", provider: "claude", turnId: "turn-1" },
+    sender,
+  );
+  publishAgentStream(lifecycle, agent, {
+    type: "turn_started",
+    provider: "claude",
+    turnId: "turn-2",
+  });
+
+  expect(emitted).toEqual([
+    {
+      name: "agent.turn.before",
+      payload: { agent, turnId: "turn-1", sender },
+    },
+    {
+      name: "agent.turn.before",
+      payload: { agent, turnId: "turn-2" },
+    },
+  ]);
 });

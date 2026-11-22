@@ -384,11 +384,17 @@ export async function sendPromptToAgent(
   params: SendDirectPromptParams,
 ): Promise<PromptDispatchResult> {
   const { agentMessages, source, messageId, ...send } = params;
+  const resolvedSource = await resolvePromptSource(
+    source,
+    params.agentManager,
+    params.agentStorage,
+  );
   return agentMessages.sendDirect(
     {
       recipientId: params.agentId,
       prompt: params.prompt,
-      source: await resolvePromptSource(source, params.agentManager, params.agentStorage),
+      source: resolvedSource,
+      sender: resolvedSource ? undefined : send.runOptions?.senderClient,
       messageId,
       sessionMode: params.sessionMode,
       unarchive: params.unarchive,
@@ -472,10 +478,16 @@ export async function startCreatedAgentInitialPrompt(
     return currentSnapshot;
   }
 
+  const resolvedSource = await resolvePromptSource(
+    params.source,
+    params.agentManager,
+    params.agentStorage,
+  );
   const delivery = prepareAgentMessage(
     params.prompt,
-    await resolvePromptSource(params.source, params.agentManager, params.agentStorage),
+    resolvedSource,
     params.runOptions?.clientMessageId,
+    resolvedSource ? undefined : params.runOptions?.senderClient,
   );
   const dispatchResult = await startAgentRun(
     params.agentManager,

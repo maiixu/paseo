@@ -7,6 +7,7 @@ import { expect, onTestFinished, test } from "vitest";
 import { DaemonClient } from "../test-utils/daemon-client.js";
 import { createTestPaseoDaemon } from "../test-utils/paseo-daemon.js";
 import { resolveDaemonVersion } from "../daemon-version.js";
+import { buildRuntimeHostSystemPrompt, resolveRuntimeHostName } from "../agent/runtime-context.js";
 import { BuiltinPluginLoader } from "./builtin/index.js";
 import { createPaseoApi } from "@getpaseo/client";
 
@@ -228,10 +229,26 @@ export default function contribute(server) {
           event: { outcome: { kind: "completed" }, timeline: [] },
           turn: ["user_message", "tool_call"],
         },
-        { hook: "agent.turn.before", event: { agent: { id: agent.id } } },
+        {
+          hook: "agent.turn.before",
+          event: {
+            agent: { id: agent.id },
+            sender: {
+              device: "CLI",
+              locality: "local",
+              clientType: "cli",
+              transport: "direct",
+            },
+          },
+        },
       ]);
     const page = await client.fetchAgentTimeline(agent.id, { direction: "tail", limit: 20 });
     expect(page.entries.length).toBeGreaterThan(0);
+    const userEntry = page.entries.find((entry) => entry.item.type === "user_message");
+    expect(userEntry?.item).toMatchObject({
+      type: "user_message",
+      text: "Run rm -f permission.txt",
+    });
     await client.archiveAgent(agent.id);
     await expect
       .poll(async () => {
@@ -585,7 +602,7 @@ test("agent creation hooks change the provider and environment before the sessio
           hook: "provider.open",
           config: {
             env: { HOOK_CREATE: "created", HOOK_OPEN: "opened" },
-            systemPrompt: "Saved instructions\n\nFirst plugin\n\nPlugin instructions",
+            systemPrompt: `Saved instructions\n\n${buildRuntimeHostSystemPrompt(resolveRuntimeHostName())}\n\nFirst plugin\n\nPlugin instructions`,
           },
         },
         {
@@ -593,6 +610,7 @@ test("agent creation hooks change the provider and environment before the sessio
           event: { agent: { id: agent.id, provider: PROVIDER_ID } },
         },
       ]);
+    const runtimeHostPrompt = buildRuntimeHostSystemPrompt(resolveRuntimeHostName());
     await writePrompt("Changed plugin");
     await client.reloadPlugin("a-prompt");
     await daemon.daemon.agentManager.reloadAgentSession(agent.id);
@@ -602,9 +620,9 @@ test("agent creation hooks change the provider and environment before the sessio
       .filter((entry) => entry.message.startsWith('{"hook":"provider.open"'))
       .map((entry) => JSON.parse(entry.message).config.systemPrompt);
     expect(opens).toEqual([
-      "Saved instructions\n\nFirst plugin\n\nPlugin instructions",
-      "Saved instructions\n\nChanged plugin\n\nPlugin instructions",
-      "Saved instructions\n\nPlugin instructions",
+      `Saved instructions\n\n${runtimeHostPrompt}\n\nFirst plugin\n\nPlugin instructions`,
+      `Saved instructions\n\n${runtimeHostPrompt}\n\nChanged plugin\n\nPlugin instructions`,
+      `Saved instructions\n\n${runtimeHostPrompt}\n\nPlugin instructions`,
     ]);
     expect((await daemon.daemon.agentStorage.get(agent.id))?.config?.systemPrompt).toBe(
       "Saved instructions",

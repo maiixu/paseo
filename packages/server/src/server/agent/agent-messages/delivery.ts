@@ -6,7 +6,13 @@ import {
 } from "../agent-prompt.js";
 import { randomUUID } from "node:crypto";
 import type { AgentPromptInput, AgentPromptContentBlock } from "../agent-sdk-types.js";
-import { envelopeMessage, prepareAgentMessage, type AgentPromptSource } from "./envelope.js";
+import type { SenderClientInfo } from "../runtime-context.js";
+import {
+  envelopeMessage,
+  isSlashCommandPrompt,
+  prepareAgentMessage,
+  type AgentPromptSource,
+} from "./envelope.js";
 import { describeAgentMessage, type AgentMessageBehavior } from "./guidance.js";
 
 /** A message's quiet window closes this long after the latest arrival. */
@@ -89,6 +95,7 @@ interface DirectPrompt {
   recipientId: string;
   prompt: AgentPromptInput;
   source?: AgentPromptSource;
+  sender?: SenderClientInfo;
   messageId?: string;
   sessionMode?: string;
   unarchive?: boolean;
@@ -150,16 +157,7 @@ const isUrgent = (message: Admitted): boolean => isQueued(message) && message.ur
 const isOfferable = (message: Admitted): boolean =>
   isQueued(message) && !message.outOfBandDeclined && message.sessionMode === undefined;
 
-/**
- * Providers read a command from the raw start of the prompt: a slash and a name with no
- * second slash in it. A path such as `/tmp/build.log` is plain text.
- */
-function isCommand(prompt: AgentPromptInput): boolean {
-  const first = typeof prompt === "string" ? prompt : prompt[0];
-  if (typeof first !== "string" && first?.type !== "text") return false;
-  const text = typeof first === "string" ? first : first.text;
-  return /^\/[^\s/]+(\s|$)/.test(text.trim());
-}
+const isCommand = isSlashCommandPrompt;
 
 function combine(prompts: AgentPromptInput[]): AgentPromptInput {
   return prompts.every((entry) => typeof entry === "string")
@@ -486,7 +484,12 @@ export function createAgentMessageDelivery(dependencies: Dependencies): AgentMes
 
   function join(queued: Admitted[], direct: DirectPrompt): JoinedPrompt {
     if (!queued.length) {
-      const own = prepareAgentMessage(direct.prompt, direct.source, direct.messageId);
+      const own = prepareAgentMessage(
+        direct.prompt,
+        direct.source,
+        direct.messageId,
+        direct.sender,
+      );
       return {
         prompt: own.prompt,
         messageId: own.messageId,
@@ -496,7 +499,12 @@ export function createAgentMessageDelivery(dependencies: Dependencies): AgentMes
     }
     // Sharing a prompt with agent messages, a person's text needs its own envelope to stay
     // a separate row with its own identity.
-    const own = envelopeMessage(direct.prompt, direct.source ?? null, direct.messageId);
+    const own = envelopeMessage(
+      direct.prompt,
+      direct.source ?? null,
+      direct.messageId,
+      direct.sender,
+    );
     return {
       prompt: combine([...queued.map(envelope), own.prompt]),
       messageId: own.messageId,

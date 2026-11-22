@@ -18,6 +18,7 @@ import type {
   ProviderUpdateResult,
 } from "@getpaseo/plugin/server/provider";
 import type { PaseoToolCatalog } from "./tools/types.js";
+import type { SenderClientInfo } from "./runtime-context.js";
 
 export type {
   AgentMetric,
@@ -211,6 +212,7 @@ export interface AgentRunOptions {
   resumeFrom?: AgentPersistenceHandle;
   maxThinkingTokens?: number;
   clientMessageId?: string;
+  senderClient?: SenderClientInfo;
 }
 
 export interface AgentSteerOptions extends AgentRunOptions {

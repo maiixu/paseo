@@ -20,6 +20,7 @@ import type {
   PluginHookPayload,
   PluginHookContext,
   PluginLifecycleRegistration,
+  PluginMessageSender,
 } from "@getpaseo/plugin/server";
 import { PARENT_AGENT_ID_LABEL } from "@getpaseo/protocol/agent-labels";
 import type {
@@ -194,9 +195,14 @@ export function publishAgentStream(
   lifecycle: PluginLifecycle,
   agent: PluginHookAgent,
   event: AgentStreamEvent,
+  sender?: PluginMessageSender,
 ): void {
   if (event.type === "turn_started") {
-    lifecycle.emit("agent.turn.before", { agent, turnId: event.turnId ?? null });
+    lifecycle.emit("agent.turn.before", {
+      agent,
+      turnId: event.turnId ?? null,
+      ...(sender ? { sender } : {}),
+    });
   } else if (event.type === "turn_completed") {
     lifecycle.emit("agent.turn.after", {
       agent,

@@ -2905,6 +2905,46 @@ test("daemon append system prompt is injected into Pi configs", async () => {
   expect(client.createdConfigs[0]?.daemonAppendSystemPrompt).toBe("Daemon instructions.");
 });
 
+test("runtimeSystemPrompt composes with appendSystemPrompt, survives updates, and is not persisted", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-test-"));
+  const storagePath = join(workdir, "agents");
+  const storage = new AgentStorage(storagePath, logger);
+  const client = new TestAgentClient();
+  const manager = new AgentManager({
+    clients: {
+      codex: client,
+    },
+    registry: storage,
+    logger,
+    runtimeSystemPrompt: "Paseo runtime host: cloudtop.",
+    appendSystemPrompt: "Daemon instructions.",
+    idFactory: () => "00000000-0000-4000-8000-000000000105",
+  });
+
+  const snapshot = await manager.createAgent(
+    {
+      provider: "codex",
+      cwd: workdir,
+      systemPrompt: "Agent instructions.",
+    },
+    undefined,
+    { workspaceId: undefined },
+  );
+  const record = await storage.get(snapshot.id);
+
+  expect(client.createdConfigs[0]?.daemonAppendSystemPrompt).toBe(
+    "Paseo runtime host: cloudtop.\n\nDaemon instructions.",
+  );
+  expect(snapshot.config).not.toHaveProperty("daemonAppendSystemPrompt");
+  expect(record?.config).not.toHaveProperty("daemonAppendSystemPrompt");
+
+  manager.setAppendSystemPrompt("");
+  await manager.reloadAgentSession(snapshot.id);
+  expect(client.resumeOverrides.at(-1)?.daemonAppendSystemPrompt).toBe(
+    "Paseo runtime host: cloudtop.",
+  );
+});
+
 test("setAgentMode persists the selected mode across session reload", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-test-"));
   const storagePath = join(workdir, "agents");

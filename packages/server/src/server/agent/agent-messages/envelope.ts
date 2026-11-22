@@ -29,10 +29,24 @@ const sourceSchema = z.discriminatedUnion("kind", [
 ]);
 export type AgentPromptSource = z.infer<typeof sourceSchema>;
 
+import type { SenderClientInfo } from "../runtime-context.js";
+
 interface AgentMessage {
   id: string;
   source: AgentPromptSource | null;
   text: string;
+  sender?: SenderClientInfo;
+}
+
+/**
+ * Providers read a command from the raw start of the prompt: a slash and a name with no
+ * second slash in it. A path such as `/tmp/build.log` is plain text.
+ */
+export function isSlashCommandPrompt(prompt: AgentPromptInput): boolean {
+  const first = typeof prompt === "string" ? prompt : prompt[0];
+  if (typeof first !== "string" && first?.type !== "text") return false;
+  const text = typeof first === "string" ? first : first.text;
+  return /^\/[^\s/]+(\s|$)/.test(text.trim());
 }
 
 function escapeXml(value: string): string {
@@ -81,7 +95,13 @@ export function formatAgentMessage(message: AgentMessage): string {
   const server = source?.serverId ? ` source-server-id="${escapeXml(source.serverId)}"` : "";
   const title = source?.title ? ` source-agent-title="${escapeXml(source.title)}"` : "";
   const event = source?.kind === "agent-notification" ? ` event="${source.event}"` : "";
-  return `<paseo-system version="1" ${attributes} message-id="${escapeXml(message.id)}"${server}${title}${event}>\n${escapeXml(message.text)}\n</paseo-system>`;
+  const senderDevice =
+    !source && message.sender?.device ? ` sender-device="${escapeXml(message.sender.device)}"` : "";
+  const senderLocality =
+    !source && message.sender?.locality
+      ? ` sender-locality="${escapeXml(message.sender.locality)}"`
+      : "";
+  return `<paseo-system version="1" ${attributes} message-id="${escapeXml(message.id)}"${server}${title}${event}${senderDevice}${senderLocality}>\n${escapeXml(message.text)}\n</paseo-system>`;
 }
 
 export function parseAgentMessage(text: string): AgentMessage | null {
@@ -101,7 +121,13 @@ export function parseAgentMessage(text: string): AgentMessage | null {
   if (!id || body === null) return null;
   if (attributes.get("kind") === "user-message") {
     if (attributes.has("source-agent-id") || attributes.has("event")) return null;
-    return { id, source: null, text: body };
+    const senderDevice = attributes.get("sender-device");
+    const senderLocality = attributes.get("sender-locality");
+    const sender: SenderClientInfo | undefined =
+      senderDevice && (senderLocality === "local" || senderLocality === "remote")
+        ? { device: senderDevice, locality: senderLocality }
+        : undefined;
+    return { id, source: null, text: body, ...(sender ? { sender } : {}) };
   }
   const source = sourceSchema.safeParse({
     kind: attributes.get("kind"),
@@ -133,6 +159,7 @@ export function prepareAgentMessage(
   prompt: AgentPromptInput,
   source?: AgentPromptSource,
   id?: string,
+  sender?: SenderClientInfo,
 ): { prompt: AgentPromptInput; messageId?: string } {
   if (!source) {
     const submittedText =
@@ -144,29 +171,39 @@ export function prepareAgentMessage(
             )
             .join("\n")
             .trim();
+    const needsQuoting = Boolean(
+      parseAgentMessages(submittedText) || isSystemInjectedEnvelope(submittedText),
+    );
     // Quote reserved envelopes only when they arrived through the human send path.
-    // This provenance must survive provider history, not only the accepted local row.
-    if (!parseAgentMessages(submittedText) && !isSystemInjectedEnvelope(submittedText)) {
+    // Never wrap provider slash commands — providers detect them from the raw start of the prompt.
+    if (!needsQuoting && (!sender || isSlashCommandPrompt(prompt))) {
       return { prompt, messageId: id };
     }
+    return envelopeMessage(prompt, null, id, sender);
   }
-  return envelopeMessage(prompt, source ?? null, id);
+  return envelopeMessage(prompt, source, id);
 }
 
 /**
  * Wrap a prompt in its envelope unconditionally. A person's prompt (`source` null) needs one
- * only when it is quoted or shares a provider prompt with agent messages.
+ * when it is quoted, carries sender device metadata, or shares a provider prompt with agent messages.
  */
 export function envelopeMessage(
   prompt: AgentPromptInput,
   source: AgentPromptSource | null,
   id?: string,
+  sender?: SenderClientInfo,
 ): { prompt: AgentPromptInput; messageId: string } {
   const messageId = id ?? randomUUID();
   const text = typeof prompt === "string" ? prompt : prompt.flatMap(renderMessageText).join("\n\n");
   // Render textual attachments before wrapping, so provider replay still contains one
   // complete envelope instead of an envelope followed by provider-rendered context.
-  const envelope = formatAgentMessage({ id: messageId, source, text });
+  const envelope = formatAgentMessage({
+    id: messageId,
+    source,
+    text,
+    ...(source === null && sender ? { sender } : {}),
+  });
   return {
     messageId,
     prompt:
