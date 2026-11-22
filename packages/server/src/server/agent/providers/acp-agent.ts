@@ -483,20 +483,6 @@ export type ACPCatalogModelResolver = (
   context: ACPCatalogModelResolverContext,
 ) => Promise<AgentModelDefinition[]>;
 
-export interface ACPSessionMetaResolverContext {
-  cwd: string;
-  env?: Record<string, string>;
-}
-
-/**
- * Optional provider hook that supplies ACP request `_meta` for interactive
- * `session/new`, `session/load`, and `session/resume` calls (not catalog or
- * diagnostic probes).
- */
-export type ACPSessionMetaResolver = (
-  context: ACPSessionMetaResolverContext,
-) => Promise<Record<string, unknown> | undefined> | Record<string, unknown> | undefined;
-
 interface ACPAgentClientOptions {
   provider: string;
   // Provider id usage sources match a session against; ACP sessions without one report no usage.
@@ -506,8 +492,6 @@ interface ACPAgentClientOptions {
   defaultCommand: [string, ...string[]];
   defaultModes?: AgentMode[];
   catalogModelResolver?: ACPCatalogModelResolver;
-  sessionMetaResolver?: ACPSessionMetaResolver;
-  preferConfigOptionModels?: boolean;
   modelTransformer?: (models: AgentModelDefinition[]) => AgentModelDefinition[];
   sessionResponseTransformer?: (response: SessionStateResponse) => SessionStateResponse;
   configOptionsTransformer?: (configOptions: SessionConfigOption[]) => SessionConfigOption[];
@@ -540,8 +524,6 @@ interface ACPAgentSessionOptions {
   runtimeSettings?: ProviderRuntimeSettings;
   defaultCommand: [string, ...string[]];
   defaultModes: AgentMode[];
-  sessionMetaResolver?: ACPSessionMetaResolver;
-  preferConfigOptionModels?: boolean;
   modelTransformer?: (models: AgentModelDefinition[]) => AgentModelDefinition[];
   sessionResponseTransformer?: (response: SessionStateResponse) => SessionStateResponse;
   configOptionsTransformer?: (configOptions: SessionConfigOption[]) => SessionConfigOption[];
@@ -856,15 +838,10 @@ export function deriveModelDefinitionsFromACP(
   provider: string,
   models: SessionModelState | null | undefined,
   configOptions?: SessionConfigOption[] | null,
-  options?: { preferConfigOptionModels?: boolean },
 ): AgentModelDefinition[] {
   const sessionThinking = deriveSessionThinking(configOptions);
-  const modelOptions = deriveSelectorOptions(configOptions, "model");
 
-  if (
-    models?.availableModels?.length &&
-    !(options?.preferConfigOptionModels && modelOptions.length > 0)
-  ) {
+  if (models?.availableModels?.length) {
     return models.availableModels.map((model) => {
       const isDefault = model.modelId === models.currentModelId;
       const thinking = deriveACPModelThinking({
@@ -884,6 +861,7 @@ export function deriveModelDefinitionsFromACP(
     });
   }
 
+  const modelOptions = deriveSelectorOptions(configOptions, "model");
   return modelOptions.map((option) => {
     const thinking = deriveACPModelThinking({
       metadata: option.metadata,
@@ -1077,8 +1055,6 @@ export class ACPAgentClient implements AgentClient {
   protected readonly defaultCommand: [string, ...string[]];
   protected readonly defaultModes: AgentMode[];
   private readonly catalogModelResolver?: ACPCatalogModelResolver;
-  private readonly sessionMetaResolver?: ACPSessionMetaResolver;
-  private readonly preferConfigOptionModels: boolean;
   private readonly modelTransformer?: (models: AgentModelDefinition[]) => AgentModelDefinition[];
   private readonly sessionResponseTransformer?: (
     response: SessionStateResponse,
@@ -1122,8 +1098,6 @@ export class ACPAgentClient implements AgentClient {
     this.defaultCommand = options.defaultCommand;
     this.defaultModes = options.defaultModes ?? [];
     this.catalogModelResolver = options.catalogModelResolver;
-    this.sessionMetaResolver = options.sessionMetaResolver;
-    this.preferConfigOptionModels = options.preferConfigOptionModels ?? false;
     this.modelTransformer = options.modelTransformer;
     this.sessionResponseTransformer = options.sessionResponseTransformer;
     this.configOptionsTransformer = options.configOptionsTransformer;
@@ -1157,8 +1131,6 @@ export class ACPAgentClient implements AgentClient {
         runtimeSettings: this.runtimeSettings,
         defaultCommand: this.defaultCommand,
         defaultModes: this.defaultModes,
-        sessionMetaResolver: this.sessionMetaResolver,
-        preferConfigOptionModels: this.preferConfigOptionModels,
         modelTransformer: this.modelTransformer,
         sessionResponseTransformer: this.sessionResponseTransformer,
         configOptionsTransformer: this.configOptionsTransformer,
@@ -1217,8 +1189,6 @@ export class ACPAgentClient implements AgentClient {
       runtimeSettings: this.runtimeSettings,
       defaultCommand: this.defaultCommand,
       defaultModes: this.defaultModes,
-      sessionMetaResolver: this.sessionMetaResolver,
-      preferConfigOptionModels: this.preferConfigOptionModels,
       modelTransformer: this.modelTransformer,
       sessionResponseTransformer: this.sessionResponseTransformer,
       configOptionsTransformer: this.configOptionsTransformer,
@@ -1312,7 +1282,6 @@ export class ACPAgentClient implements AgentClient {
         this.provider,
         transformed.models,
         transformed.configOptions,
-        { preferConfigOptionModels: this.preferConfigOptionModels },
       );
       const models = this.catalogModelResolver
         ? await runProviderRefreshActivity(context, "catalog.resolve", () =>
@@ -1774,7 +1743,6 @@ export class ACPAgentClient implements AgentClient {
           this.provider,
           transformed.models,
           transformed.configOptions,
-          { preferConfigOptionModels: this.preferConfigOptionModels },
         );
         const modeInfo = deriveModesFromACP(
           this.defaultModes,
@@ -1868,8 +1836,6 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   private readonly runtimeSettings?: ProviderRuntimeSettings;
   private readonly defaultCommand: [string, ...string[]];
   private readonly defaultModes: AgentMode[];
-  private readonly sessionMetaResolver?: ACPSessionMetaResolver;
-  private readonly preferConfigOptionModels: boolean;
   protected readonly modelTransformer?: (models: AgentModelDefinition[]) => AgentModelDefinition[];
   private readonly sessionResponseTransformer?: (
     response: SessionStateResponse,
@@ -1954,8 +1920,6 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     this.runtimeSettings = options.runtimeSettings;
     this.defaultCommand = options.defaultCommand;
     this.defaultModes = options.defaultModes;
-    this.sessionMetaResolver = options.sessionMetaResolver;
-    this.preferConfigOptionModels = options.preferConfigOptionModels ?? false;
     this.modelTransformer = options.modelTransformer;
     this.sessionResponseTransformer = options.sessionResponseTransformer;
     this.configOptionsTransformer = options.configOptionsTransformer;
@@ -2002,25 +1966,6 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     };
   }
 
-  private async resolveSessionMeta(): Promise<Record<string, unknown> | undefined> {
-    if (!this.sessionMetaResolver) {
-      return undefined;
-    }
-    try {
-      const meta = await this.sessionMetaResolver({
-        cwd: this.config.cwd,
-        env: this.harnessEnvironment,
-      });
-      return meta && Object.keys(meta).length > 0 ? meta : undefined;
-    } catch (error) {
-      this.logger.warn(
-        { error: toDiagnosticErrorMessage(error), cwd: this.config.cwd },
-        `${this.provider} session meta resolver failed; continuing without session _meta`,
-      );
-      return undefined;
-    }
-  }
-
   async initializeNewSession(): Promise<void> {
     try {
       const spawned = await this.spawnProcess();
@@ -2028,12 +1973,10 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       this.connection = spawned.connection;
       this.agentCapabilities = spawned.initialize.agentCapabilities ?? null;
 
-      const sessionMeta = await this.resolveSessionMeta();
       const response = await this.runACPRequest(() =>
         this.connection!.newSession({
           cwd: this.config.cwd,
           mcpServers: this.acpMcpServers(),
-          ...(sessionMeta ? { _meta: sessionMeta } : {}),
         }),
       );
       this.sessionId = response.sessionId;
@@ -2069,8 +2012,6 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       this.sessionId = handle.sessionId;
       this.bootstrapThreadEventPending = true;
 
-      const sessionMeta =
-        this.resumePurpose === "history" ? undefined : await this.resolveSessionMeta();
       const sessionCapabilities = this.agentCapabilities?.sessionCapabilities;
       if (this.agentCapabilities?.loadSession) {
         this.replayingHistory = true;
@@ -2079,7 +2020,6 @@ export class ACPAgentSession implements AgentSession, ACPClient {
             sessionId: handle.sessionId,
             cwd: this.config.cwd,
             mcpServers: this.acpMcpServers(),
-            ...(sessionMeta ? { _meta: sessionMeta } : {}),
           }),
         );
         this.deliverTranslatedEvents(this.flushPendingUserMessage());
@@ -2092,7 +2032,6 @@ export class ACPAgentSession implements AgentSession, ACPClient {
             sessionId: handle.sessionId,
             cwd: this.config.cwd,
             mcpServers: this.acpMcpServers(),
-            ...(sessionMeta ? { _meta: sessionMeta } : {}),
           }),
         );
         this.applySessionState(response);
@@ -2500,9 +2439,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       throw new Error("ACP session not initialized");
     }
 
-    const useConfigOptionModel = this.preferConfigOptionModels && Boolean(selection.configOption);
-
-    if (!useConfigOptionModel && selection.hasAvailableModels && !selection.availableModel) {
+    if (selection.hasAvailableModels && !selection.availableModel) {
       this.warnInvalidSelection(
         modelId,
         `is not a valid ${this.provider} model. Available options: ${this.availableModels
@@ -2513,7 +2450,6 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     }
 
     if (
-      !useConfigOptionModel &&
       selection.availableModel &&
       typeof this.connection.unstable_setSessionModel === "function"
     ) {
@@ -2538,10 +2474,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     if (!modelOption) {
       throw new Error(this.modelSelectionUnavailableMessage());
     }
-    const isValidConfigModel = Boolean(
-      selection.configChoice || (useConfigOptionModel && selection.availableModel),
-    );
-    if (!isValidConfigModel) {
+    if (!selection.configChoice) {
       this.warnInvalidSelection(
         modelId,
         `is not a valid ${this.provider} model config option. Available options: ${flattenSelectOptions(
@@ -2569,25 +2502,12 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       requestedValue: modelId,
       label: "model",
     });
-    const nextThinkingOptionId = deriveCurrentConfigValue(this.configOptions, "thought_level");
-    const thinkingChanged =
-      nextThinkingOptionId !== null && nextThinkingOptionId !== this.thinkingOptionId;
-    if (nextThinkingOptionId !== null) {
-      this.thinkingOptionId = nextThinkingOptionId;
-    }
     this.reportFeatureChanges(before);
     this.pushEvent({
       type: "model_changed",
       provider: this.provider,
       runtimeInfo: this.runtimeInfo(),
     });
-    if (thinkingChanged) {
-      this.pushEvent({
-        type: "thinking_option_changed",
-        provider: this.provider,
-        thinkingOptionId: this.thinkingOptionId,
-      });
-    }
   }
 
   async setThinkingOption(thinkingOptionId: string | null): Promise<void> {
@@ -2868,9 +2788,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     if (this.activeForegroundTurnId) {
       const prompt = this.activePrompt;
       await this.connection.cancel({ sessionId: this.sessionId });
-      // ACP cancel is a notification: writing it does not acknowledge that the
-      // provider stopped. Only settlement of the captured prompt releases the turn.
-      // The manager bounds this wait and preserves the active run on timeout.
+      // ACP cancel is a notification. Wait for the provider to settle the prompt.
       await prompt;
     }
   }
@@ -2938,6 +2856,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     this.connection = null;
     this.child = null;
     this.activeForegroundTurnId = null;
+    this.activePrompt = null;
   }
 
   async requestPermission(params: RequestPermissionRequest): Promise<RequestPermissionResponse> {
@@ -3206,7 +3125,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     return resolveResumeProcessCwd(this.config.cwd, this.resumePurpose);
   }
 
-  protected async spawnProcess(): Promise<SpawnedACPProcess> {
+  private async spawnProcess(): Promise<SpawnedACPProcess> {
     const prefix = await resolveProviderLaunch({
       commandConfig: this.runtimeSettings?.command,
       defaultBinary: this.defaultCommand[0],
@@ -3301,10 +3220,8 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     this.currentMode = modeInfo.currentModeId ?? this.currentMode;
 
     this.availableModels = transformed.models?.availableModels ?? null;
-    const configModel = deriveCurrentConfigValue(this.configOptions, "model");
-    this.currentModel = this.preferConfigOptionModels
-      ? (configModel ?? transformed.models?.currentModelId ?? null)
-      : (transformed.models?.currentModelId ?? configModel);
+    this.currentModel =
+      transformed.models?.currentModelId ?? deriveCurrentConfigValue(this.configOptions, "model");
     this.thinkingOptionId =
       deriveCurrentConfigValue(this.configOptions, "thought_level") ?? this.thinkingOptionId;
   }

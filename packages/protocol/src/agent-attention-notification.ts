@@ -8,7 +8,6 @@ export interface AgentAttentionNotificationData {
   workspaceId?: string;
   agentId: string;
   reason: AgentAttentionReason;
-  requestId?: string;
 }
 
 export interface AgentAttentionNotificationPayload {
@@ -214,9 +213,6 @@ export function buildAgentAttentionNotificationPayload(
       workspaceId: input.workspaceId,
       agentId: input.agentId,
       reason: input.reason,
-      ...(input.reason === "permission" && input.permissionRequest?.kind === "question"
-        ? { requestId: input.permissionRequest.id }
-        : {}),
     },
   };
 }

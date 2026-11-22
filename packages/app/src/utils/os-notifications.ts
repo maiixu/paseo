@@ -1,17 +1,12 @@
-import { buildNotificationRoute } from "./notification-routing";
-export { WEB_NOTIFICATION_CLICK_EVENT } from "@/notification-open";
 import { Asset } from "expo-asset";
 import { getDesktopHost } from "@/desktop/host";
 import { parseNotificationOpenTarget, WEB_NOTIFICATION_CLICK_EVENT } from "@/notification-open";
 import { isNative } from "@/constants/platform";
-import type { BrowserFeedbackNotification } from "@getpaseo/protocol/browser-feedback";
-import { getBrowserCompanion } from "@/browser-feedback/companion-client";
 
 interface OsNotificationPayload {
   title: string;
   body?: string;
   data?: Record<string, unknown>;
-  browserFeedback?: BrowserFeedbackNotification;
 }
 
 export interface WebNotificationClickDetail {
@@ -19,7 +14,6 @@ export interface WebNotificationClickDetail {
 }
 
 interface WebNotificationInstance {
-  close: () => void;
   addEventListener: (type: "click", listener: (event: Event) => void) => void;
 }
 
@@ -138,32 +132,12 @@ function dispatchWebNotificationClick(detail: WebNotificationClickDetail): boole
   return !dispatch(event);
 }
 
-function fallbackNavigateToNotificationTarget(data: Record<string, unknown> | undefined): void {
-  const route = buildNotificationRoute(data);
-  const location = (globalThis as { location?: { assign?: (url: string) => void; href?: string } })
-    .location;
-  if (!location) {
-    return;
-  }
-  if (typeof location.assign === "function") {
-    location.assign(route);
-    return;
-  }
-  if (typeof location.href === "string") {
-    location.href = route;
-  }
-}
-
 function attachWebClickHandler(
   notification: WebNotificationInstance,
   data: Record<string, unknown> | undefined,
 ): void {
   notification.addEventListener("click", () => {
-    notification.close();
-    const handledByApp = dispatchWebNotificationClick({ data });
-    if (!handledByApp) {
-      fallbackNavigateToNotificationTarget(data);
-    }
+    dispatchWebNotificationClick({ data });
   });
 }
 
@@ -176,15 +150,6 @@ export async function sendOsNotification(payload: OsNotificationPayload): Promis
   const desktopNotificationSender = getDesktopNotificationSender();
   if (desktopNotificationSender) {
     return await desktopNotificationSender(payload);
-  }
-
-  if (payload.browserFeedback) {
-    const companion = getBrowserCompanion();
-    const delivery = await companion?.send(payload.browserFeedback);
-    if (delivery && delivery.status !== "unavailable") {
-      // Never fall back after an ambiguous timeout: Chrome may already have accepted it.
-      return delivery.status !== "failed";
-    }
   }
 
   const NotificationConstructor = getWebNotificationConstructor();

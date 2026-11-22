@@ -1,6 +1,8 @@
 import path from "node:path";
 import { defineConfig } from "vitest/config";
 
+const ciMaxWorkers = process.env.CI ? "100%" : undefined;
+
 export default defineConfig({
   resolve: {
     alias: {
@@ -19,9 +21,9 @@ export default defineConfig({
     setupFiles: [path.resolve(__dirname, "./src/test-utils/vitest-setup.ts")],
     pool: "forks",
     fileParallelism: false,
-    // Even two concurrent Git-heavy suites can exhaust Windows test deadlines.
-    // Run files serially so their subprocesses do not compete across suites.
-    maxWorkers: process.platform === "win32" ? 1 : undefined,
+    // On 4-CPU CI runners, Vitest's default (availableParallelism - 1 = 3) leaves
+    // 25% of the runner idle during parallel unit suites. CLI --maxWorkers still overrides this.
+    maxWorkers: process.platform === "win32" ? 1 : ciMaxWorkers,
     exclude: ["**/node_modules/**", "**/dist/**", "**/.claude/**", "**/.dev/**"],
   },
 });

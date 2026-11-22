@@ -2372,52 +2372,56 @@ it("keeps AGY off passive reads and reports failed planning observations as unav
   expect(JSON.stringify(result)).not.toContain("private diagnostic");
 });
 
-it("keeps an unresolved AGY agent unknown and preserves the observation's account, time and scope", async () => {
-  const stamp = "2026-11-18T03:00:00Z";
-  const listAntigravity = vi.fn(async (options: { agentId?: string }) =>
-    options.agentId
-      ? []
-      : [
-          {
-            id: "antigravity:opaque",
-            sourceId: "antigravity",
-            sourceLabel: "Antigravity",
-            account: {},
-            fetchedAt: stamp,
-            report: {
-              status: "available" as const,
-              windows: [{ id: "models:neon", label: "Neon", remainingPct: 42 }],
+it.each(["antigravity", "antigravity-cli"])(
+  "keeps unresolved AGY agents unknown and reads the scoped %s source",
+  async (sourceId) => {
+    const stamp = "2026-11-18T03:00:00Z";
+    const listAntigravity = vi.fn(async (options: { agentId?: string }) =>
+      options.agentId
+        ? []
+        : [
+            {
+              id: `${sourceId}:opaque`,
+              sourceId,
+              sourceLabel: "Antigravity",
+              account: {},
+              fetchedAt: stamp,
+              report: {
+                status: "available" as const,
+                windows: [{ id: "models:neon", label: "Neon", remainingPct: 42 }],
+              },
             },
-          },
-        ],
-  );
-  const service = new ProviderUsageService({
-    logger: createLogger(),
-    fetchers: [],
-    usageSources: {
-      isEnabled: () => true,
-      agentProvider: (id) => (id === "agy" ? "antigravity" : undefined),
-      listAntigravity,
-    },
-  });
-  expect(
-    (await service.listUsage({ agentId: "missing", includeAntigravity: true })).providers[0]
-      ?.status,
-  ).toBe("unavailable");
-  expect(listAntigravity).not.toHaveBeenCalled();
-  expect(
-    (await service.listUsage({ agentId: "agy", includeAntigravity: true })).providers[0]?.accounts,
-  ).toEqual([]);
-  expect(listAntigravity).toHaveBeenLastCalledWith({
-    sourceId: "antigravity",
-    agentId: "agy",
-    forceRefresh: undefined,
-  });
-  expect(
-    (await service.listUsage({ includeAntigravity: true })).providers[0]?.accounts?.[0],
-  ).toMatchObject({
-    sourceLabel: "host_default",
-    accountId: "antigravity:opaque",
-    fetchedAt: stamp,
-  });
-});
+          ],
+    );
+    const service = new ProviderUsageService({
+      logger: createLogger(),
+      fetchers: [],
+      usageSources: {
+        isEnabled: (id) => id === sourceId || id === "antigravity-cli",
+        agentProvider: (id) => (id === "agy" ? "antigravity" : undefined),
+        listAntigravity,
+      },
+    });
+    expect(
+      (await service.listUsage({ agentId: "missing", includeAntigravity: true })).providers[0]
+        ?.status,
+    ).toBe("unavailable");
+    expect(listAntigravity).not.toHaveBeenCalled();
+    expect(
+      (await service.listUsage({ agentId: "agy", includeAntigravity: true })).providers[0]
+        ?.accounts,
+    ).toEqual([]);
+    expect(listAntigravity).toHaveBeenLastCalledWith({
+      sourceId,
+      agentId: "agy",
+      forceRefresh: undefined,
+    });
+    expect(
+      (await service.listUsage({ includeAntigravity: true })).providers[0]?.accounts?.[0],
+    ).toMatchObject({
+      sourceLabel: "host_default",
+      accountId: `${sourceId}:opaque`,
+      fetchedAt: stamp,
+    });
+  },
+);

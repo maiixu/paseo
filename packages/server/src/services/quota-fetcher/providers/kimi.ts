@@ -1,4 +1,4 @@
-import { existsSync, promises as fs } from "node:fs";
+import * as fs from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Logger } from "pino";
@@ -332,7 +332,6 @@ export class KimiQuotaProvider implements ProviderUsageFetcher {
   }
 
   private async readCredentialFile(path: string): Promise<KimiAuth | null> {
-    if (!existsSync(path)) return null;
     try {
       return KimiAuthSchema.parse(JSON.parse(await fs.readFile(path, "utf8")));
     } catch {

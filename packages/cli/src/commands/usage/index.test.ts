@@ -269,12 +269,13 @@ it("propagates connection and request failures", async () => {
 });
 
 describe("usage CLI registration", () => {
-  it("registers default, ls and inspect with the accepted selectors", () => {
+  it("registers reports and the model-aware planning summary", () => {
     const usage = createCli().commands.find((command) => command.name() === "usage")!;
-    expect(usage.commands.map((command) => command.name())).toEqual(["ls", "inspect"]);
+    expect(usage.commands.map((command) => command.name())).toEqual(["ls", "inspect", "summary"]);
     expect(usage.helpInformation()).toContain("--agent <id>");
     expect(usage.commands[0]!.helpInformation()).toContain("--refresh");
     expect(usage.commands[1]!.helpInformation()).toContain("<report-id>");
+    expect(usage.commands[2]!.helpInformation()).toContain("--model <id>");
   });
 });
 

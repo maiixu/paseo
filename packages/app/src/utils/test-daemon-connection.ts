@@ -8,7 +8,7 @@ import type { DaemonClientConfig } from "@getpaseo/client/internal/daemon-client
 import type { HostConnection } from "@/types/host-connection";
 import { createAppWebSocketFactory } from "@/runtime/websocket-factory";
 import { createHostLogger } from "@/runtime/host-logger";
-import { getOrCreateConnectionClientId } from "./client-id";
+import { getOrCreateClientId } from "./client-id";
 import { resolveAppVersion } from "./app-version";
 import {
   buildDaemonWebSocketUrl,
@@ -40,7 +40,7 @@ export interface DaemonConnectionDependencies<TClient extends DaemonProbeClient>
 
 const defaultDaemonConnectionDependencies: DaemonConnectionDependencies<DaemonClient> = {
   createLogger: createHostLogger,
-  getClientId: getOrCreateConnectionClientId,
+  getClientId: getOrCreateClientId,
   resolveAppVersion,
   createDesktopTransportFactory: createDesktopDaemonTransportFactory,
   buildDesktopTransportUrl: buildDesktopDaemonTransportUrl,

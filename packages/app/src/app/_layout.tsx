@@ -55,6 +55,7 @@ import { WindowSidebarMenuToggle } from "@/components/headers/sidebar-menu-toggl
 import { DesktopWindowControls } from "@/components/desktop/window-controls";
 import { SidebarModelProvider } from "@/components/sidebar/sidebar-model";
 import { WorkspacePinShortcutHandler } from "@/components/workspace-pin-shortcut-handler";
+import { WorkspaceArchiveShortcutHandler } from "@/components/workspace-archive-shortcut-handler";
 import { WorkspaceRenameHost } from "@/components/workspace-rename-host";
 import { WorkspaceArchiveUndoShortcutHost } from "@/workspace/archive-undo";
 import { WorkspaceExplorerOpenGesture } from "@/mobile-panels/explorer-open-gesture";
@@ -106,8 +107,7 @@ import { UpdateCalloutSource } from "@/desktop/updates/update-callout-source";
 import { useActiveWorktreeNewAction } from "@/hooks/use-active-worktree-new-action";
 import { useGlobalNewWorkspaceAction } from "@/hooks/use-global-new-workspace-action";
 import { useLatchedBoolean } from "@/hooks/use-latched-boolean";
-import { FaviconStatus } from "@/hooks/use-favicon-status";
-import { BrowserFeedbackSync } from "@/browser-feedback/browser-feedback-sync";
+import { useFaviconStatus } from "@/hooks/use-favicon-status";
 import { useKeyboardShortcuts } from "@/keyboard/use-shortcuts";
 import { KeyboardShiftProvider } from "@/keyboard/shift";
 import { useCompactWebViewportZoomLock } from "@/hooks/use-compact-web-viewport-zoom-lock";
@@ -539,6 +539,7 @@ function AppContainer({ children, chromeEnabled: chromeEnabledOverride }: AppCon
     <View style={layoutStyles.surfaceFill}>
       {workspaceChrome}
       <AddHostFlowHost />
+      <WorkspaceArchiveShortcutHandler />
       <AppearanceStyleBoundary>
         {!isCompactLayout && appChromeLayout.sidebarToggleOwner === "window" ? (
           <WindowChromeRegion corners="top-left">
@@ -704,8 +705,7 @@ function ProvidersWrapper({ children }: { children: ReactNode }) {
         <DesktopWindowControlsSync />
         <OfferLinkListener />
         <HostSessionManager />
-        <FaviconStatus />
-        <BrowserFeedbackSync />
+        <FaviconStatusSync />
         <BackgroundTasksSync />
         {children}
       </VoiceProvider>
@@ -901,6 +901,11 @@ function AppWithSidebar({ children }: { children: ReactNode }) {
   return <AppContainer chromeEnabled={shouldShowAppChrome}>{children}</AppContainer>;
 }
 
+function FaviconStatusSync() {
+  useFaviconStatus();
+  return null;
+}
+
 const ROOT_STACK_SCREEN_OPTIONS = {
   headerShown: false,
   animation: "none" as const,
@@ -935,6 +940,7 @@ function RootStack() {
       <Stack.Screen name="settings/hosts/[serverId]/plugin-directory/[owner]/[slug]" />
       <Stack.Screen name="settings/hosts/[serverId]/projects/index" />
       <Stack.Screen name="settings/hosts/[serverId]/projects/[projectId]" />
+      <Stack.Screen name="settings/hosts/[serverId]/providers/[providerId]" />
     </ThemedStack>
   );
 }

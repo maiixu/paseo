@@ -10,7 +10,7 @@ const ctx = await createE2ETestContext({ timeout: 30000 });
 
 try {
   {
-    console.log("Test 1: schedule create/ls/inspect/pause/resume/delete work");
+    console.log("Test 1: schedule create/ls/inspect/pause/resume/end/delete work");
     const created = await ctx.paseo(
       [
         "schedule",
@@ -60,6 +60,13 @@ try {
     const resumed = await ctx.paseo(["schedule", "resume", createdJson.id, "--json"]);
     assert.strictEqual(resumed.exitCode, 0, resumed.stderr);
     assert.strictEqual(JSON.parse(resumed.stdout).status, "active");
+
+    const ended = await ctx.paseo(["schedule", "end", createdJson.id, "--json"]);
+    assert.strictEqual(ended.exitCode, 0, ended.stderr);
+    assert.strictEqual(JSON.parse(ended.stdout).status, "completed");
+    const endedSchedule = await ctx.paseo(["schedule", "inspect", createdJson.id, "--json"]);
+    assert.strictEqual(endedSchedule.exitCode, 0, endedSchedule.stderr);
+    assert.strictEqual(JSON.parse(endedSchedule.stdout).status, "completed");
 
     const deleted = await ctx.paseo(["schedule", "delete", createdJson.id, "--json"]);
     assert.strictEqual(deleted.exitCode, 0, deleted.stderr);

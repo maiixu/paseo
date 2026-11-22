@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { ResourceDecisions, createResourceDecisionRecorder } from "./resource-decisions.js";
 import { createTestLogger } from "../../test-utils/test-logger.js";
 import type { ManagedAgent } from "./agent-manager.js";
-it("records real dispatch evidence and later state without private configuration", () => {
+it("records real dispatch evidence and later state without private configuration", async () => {
   const home = mkdtempSync(join(tmpdir(), "resource-decisions-"));
   try {
     const agent = {
@@ -29,12 +29,12 @@ it("records real dispatch evidence and later state without private configuration
       },
       labels: { "paseo.resource-reason": "bounded independent audit" },
     } as unknown as ManagedAgent;
-    const log = new ResourceDecisions(home);
-    log.dispatch(agent);
-    log.observe(agent);
-    log.observe({ ...agent, lifecycle: "running" } as ManagedAgent);
-    const reopened = new ResourceDecisions(home);
-    reopened.observe({ ...agent, lifecycle: "error" } as ManagedAgent);
+    const log = await ResourceDecisions.open(home);
+    await log.dispatch(agent);
+    await log.observe(agent);
+    await log.observe({ ...agent, lifecycle: "running" } as ManagedAgent);
+    const reopened = await ResourceDecisions.open(home);
+    await reopened.observe({ ...agent, lifecycle: "error" } as ManagedAgent);
     const file = join(home, "resource-decisions", "decisions.jsonl");
     const text = readFileSync(file, "utf8");
     expect(text).not.toContain("never-log");
@@ -61,16 +61,16 @@ function journalAgent(id: string, lifecycle: string): ManagedAgent {
   } as unknown as ManagedAgent;
 }
 
-it("loads an empty journal file and keeps recording", () => {
+it("loads an empty journal file and keeps recording", async () => {
   const home = mkdtempSync(join(tmpdir(), "resource-decisions-"));
   try {
     const dir = join(home, "resource-decisions");
     mkdirSync(dir, { recursive: true });
     const file = join(dir, "decisions.jsonl");
     writeFileSync(file, "");
-    const log = new ResourceDecisions(home);
-    log.dispatch(journalAgent("a", "idle"));
-    log.observe(journalAgent("a", "running"));
+    const log = await ResourceDecisions.open(home);
+    await log.dispatch(journalAgent("a", "idle"));
+    await log.observe(journalAgent("a", "running"));
     const rows = readFileSync(file, "utf8")
       .trim()
       .split("\n")
@@ -81,18 +81,18 @@ it("loads an empty journal file and keeps recording", () => {
   }
 });
 
-it("skips a truncated last line, keeps earlier state, and appends on a fresh line", () => {
+it("skips a truncated last line, keeps earlier state, and appends on a fresh line", async () => {
   const home = mkdtempSync(join(tmpdir(), "resource-decisions-"));
   try {
-    const first = new ResourceDecisions(home);
-    first.dispatch(journalAgent("a", "idle"));
+    const first = await ResourceDecisions.open(home);
+    await first.dispatch(journalAgent("a", "idle"));
     const file = join(home, "resource-decisions", "decisions.jsonl");
     appendFileSync(file, '{"event":"dispatch","agentId":"b","sta');
 
-    const reopened = new ResourceDecisions(home);
+    const reopened = await ResourceDecisions.open(home);
     // State loaded from the intact line still drives transitions.
-    reopened.observe(journalAgent("a", "running"));
-    reopened.dispatch(journalAgent("c", "idle"));
+    await reopened.observe(journalAgent("a", "running"));
+    await reopened.dispatch(journalAgent("c", "idle"));
 
     const lines = readFileSync(file, "utf8").trim().split("\n");
     expect(lines).toHaveLength(4);
@@ -137,7 +137,7 @@ const observedUsage = {
 it("journals create -> run -> idle even when usage discovery settles after the run", async () => {
   const home = mkdtempSync(join(tmpdir(), "resource-decisions-"));
   try {
-    const decisions = new ResourceDecisions(home);
+    const decisions = await ResourceDecisions.open(home);
     const usage = deferred<typeof observedUsage>();
     const record = createResourceDecisionRecorder({
       decisions,
@@ -169,7 +169,7 @@ it("journals create -> run -> idle even when usage discovery settles after the r
 it("records an unavailable observation when discovery fails", async () => {
   const home = mkdtempSync(join(tmpdir(), "resource-decisions-"));
   try {
-    const decisions = new ResourceDecisions(home);
+    const decisions = await ResourceDecisions.open(home);
     createResourceDecisionRecorder({
       decisions,
       getUsage: async () => {
@@ -192,15 +192,16 @@ it("records an unavailable observation when discovery outlasts the timeout", asy
   const home = mkdtempSync(join(tmpdir(), "resource-decisions-"));
   vi.useFakeTimers();
   try {
-    const decisions = new ResourceDecisions(home);
+    const decisions = await ResourceDecisions.open(home);
     createResourceDecisionRecorder({
       decisions,
       getUsage: () => new Promise(() => {}),
       logger: createTestLogger(),
       timeoutMs: 1_000,
     })(journalAgent("a", "idle"));
-    expect(journalRows(home)).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(1_000);
+    vi.useRealTimers();
+    await vi.waitFor(() => expect(journalRows(home)).toHaveLength(2));
     expect(journalRows(home)[1]).toMatchObject({
       event: "observation",
       observationState: "unavailable",

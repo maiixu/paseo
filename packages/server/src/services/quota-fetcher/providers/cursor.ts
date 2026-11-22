@@ -1,5 +1,4 @@
-import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Logger } from "pino";
@@ -143,7 +142,13 @@ async function readCursorTokenFromSqlite(homeDir: string, logger: Logger): Promi
   }
 
   for (const path of dbPaths) {
-    if (!existsSync(path)) continue;
+    if (
+      !(await access(path).then(
+        () => true,
+        () => false,
+      ))
+    )
+      continue;
     let db: CursorStateDatabase | undefined;
     try {
       db = new sqlite.DatabaseSync(path, { readOnly: true });
@@ -165,7 +170,7 @@ async function readCursorTokenFromAuthJson(
   logger: Logger,
 ): Promise<string | null> {
   const path = join(homeDir, ".config", "cursor", "auth.json");
-  if (!existsSync(path)) return null;
+
   try {
     const parsed = CursorAuthStatusSchema.parse(JSON.parse(await readFile(path, "utf8")));
     return parsed.accessToken?.trim() || null;

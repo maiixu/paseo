@@ -1,4 +1,4 @@
-import { isWeb as platformIsWeb } from "@/constants/platform";
+import { useWorkspaceRowPress } from "../../../modules/paseo-press-feedback";
 import { PressHighlight as Pressable } from "@/components/ui/press-highlight";
 import {
   memo,
@@ -20,7 +20,7 @@ import type { StatusBucket } from "@/hooks/sidebar-status-view-model";
 import type { SidebarWorkspaceGroup } from "@/components/sidebar/sidebar-labels";
 import { SidebarFilterEmptyState } from "@/components/sidebar/empty-states";
 import type { HostBadgeModel } from "@/hosts/appearance";
-import { isNative as platformIsNative } from "@/constants/platform";
+import { isWeb as platformIsWeb, isNative as platformIsNative } from "@/constants/platform";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { StyleSheet } from "react-native-unistyles";
 import { density, densityIconBox, densityIconProps } from "@/styles/density";
@@ -35,13 +35,13 @@ import {
   CircleX,
 } from "lucide-react-native";
 import { useToast } from "@/contexts/toast-context";
+import { SidebarToastClearance } from "@/components/sidebar/sidebar-toast-region";
 import { useSidebarWorkspaceRename } from "@/workspace-rename";
 import { useWorkspaceClipboardActions } from "@/hooks/use-workspace-clipboard-actions";
 import { redirectIfArchivingActiveWorkspace } from "@/utils/sidebar-workspace-archive-redirect";
 import { useWorkspaceArchive } from "@/workspace/use-workspace-archive";
 import type { ShortcutKey } from "@/utils/format-shortcut";
 import { useShortcutKeys } from "@/hooks/use-shortcut-keys";
-import { useKeyboardActionHandler } from "@/hooks/use-keyboard-action-handler";
 import { useWorkspaceReadState } from "@/hooks/use-workspace-read-state";
 import {
   SidebarWorkspaceRowFrame,
@@ -271,6 +271,7 @@ export function SidebarStatusWorkspaceList({
           onToggleWorkspacePin={onToggleWorkspacePin}
         />
       )}
+      <SidebarToastClearance />
     </>
   );
 
@@ -700,17 +701,6 @@ function StatusWorkspaceRowWithMenu({
     });
   }, [markUnread, toast]);
 
-  useKeyboardActionHandler({
-    handlerId: `workspace-archive-${workspace.workspaceKey}`,
-    actions: ["workspace.archive"],
-    enabled: selected && !isArchiving,
-    priority: 0,
-    handle: () => {
-      handleArchive();
-      return true;
-    },
-  });
-
   return (
     <>
       <StatusWorkspaceRowInner
@@ -847,13 +837,11 @@ function StatusWorkspaceRowInnerContent({
   const startDragPress = dragInteraction?.handlePressIn;
   const moveDragPress = dragInteraction?.handleTouchMove;
   const endDragPress = dragInteraction?.handlePressOut;
-  const handlePress = useCallback(() => {
-    if (didLongPressRef?.current) {
-      didLongPressRef.current = false;
-      return;
-    }
-    onPress();
-  }, [didLongPressRef, onPress]);
+  const { onPress: handlePress, feedback } = useWorkspaceRowPress({
+    didLongPressRef,
+    onPress,
+    selected,
+  });
 
   return (
     <SidebarWorkspaceRowFrame
@@ -966,6 +954,7 @@ function StatusWorkspaceRowInnerContent({
                   />
                 ) : null}
               </SidebarWorkspaceRowContent>
+              {feedback}
             </SidebarWorkspaceContextMenu>
           </View>
         );
@@ -1090,8 +1079,7 @@ const styles = StyleSheet.create((theme) => ({
     paddingHorizontal: theme.spacing[2],
     // Keep status mode's Pinned/Workspaces boundary identical to project mode.
     paddingTop: 2,
-    // The sidebar toast floats over the list's end. Keep this padding the same whether or not
-    // a toast shows: changing it moves the rows when the toast leaves.
+    // Room for the sidebar toast comes from SidebarToastClearance at the end of the content.
     paddingBottom: theme.spacing[4],
   },
   pinnedSection: {

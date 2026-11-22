@@ -36,7 +36,6 @@ import type {
 import { ClaudeAgentClient } from "./providers/claude/agent.js";
 import { CodexAppServerAgentClient } from "./providers/codex-app-server-agent.js";
 import { CopilotACPAgentClient } from "./providers/copilot-acp-agent.js";
-import { AntigravityACPAgentClient } from "./providers/antigravity-acp-agent.js";
 import { CursorACPAgentClient } from "./providers/cursor-acp-agent.js";
 import { GenericACPAgentClient } from "./providers/generic-acp-agent.js";
 import { KimiACPAgentClient } from "./providers/kimi-acp-agent.js";
@@ -449,6 +448,9 @@ export function wrapSessionProvider(provider: AgentProvider, inner: AgentSession
     get initialTimeline() {
       return inner.initialTimeline;
     },
+    get persistenceUpdatedOnResume() {
+      return inner.persistenceUpdatedOnResume;
+    },
     get controls() {
       return inner.controls;
     },
@@ -458,7 +460,9 @@ export function wrapSessionProvider(provider: AgentProvider, inner: AgentSession
     usageSession: inner.usageSession?.bind(inner),
     run: (prompt, options) => inner.run(prompt, options),
     startTurn: (prompt, options) => inner.startTurn(prompt, options),
-    steerActiveTurn: inner.steerActiveTurn?.bind(inner),
+    get steerActiveTurn() {
+      return inner.steerActiveTurn?.bind(inner);
+    },
     subscribe: (callback) => inner.subscribe((event) => callback(mapStreamEvent(provider, event))),
     async *streamHistory() {
       for await (const event of inner.streamHistory()) {
@@ -621,9 +625,11 @@ function wrapClientProvider(
     unarchiveNativeSession: unarchiveNativeSession
       ? async (handle) => await unarchiveNativeSession({ ...handle, provider: inner.provider })
       : undefined,
+    resolveUsageLaunch: inner.resolveUsageLaunch?.bind(inner),
     getCatalogCacheKey: inner.getCatalogCacheKey?.bind(inner),
     isAvailable: (signal, options) => inner.isAvailable(signal, options),
     getDiagnostic: inner.getDiagnostic?.bind(inner),
+    installation: inner.installation,
   };
 }
 
@@ -857,9 +863,6 @@ function addDerivedProviders(
             providerId,
             label: override.label ?? providerId,
           };
-          if (providerId === "antigravity") {
-            return new AntigravityACPAgentClient(acpOptions);
-          }
           if (providerId === "cursor") {
             return new CursorACPAgentClient(acpOptions);
           }

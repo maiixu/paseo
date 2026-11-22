@@ -34,8 +34,8 @@ const schema: OutputSchema<Summary> = {
     return lines.join("\n");
   },
 };
-export async function runUsageCommand(
-  options: CommandOptions & { agent?: string; model?: string },
+export async function runUsageSummary(
+  options: CommandOptions & { agent?: string; model?: string; refresh?: boolean },
   _command: Command,
 ): Promise<SingleResult<Summary>> {
   const client = await connectToDaemon({ target: options.daemonTarget });
@@ -43,6 +43,7 @@ export async function runUsageCommand(
     const usage = await client.listProviderUsage({
       agentId: options.agent,
       includeAntigravity: true,
+      forceRefresh: options.refresh,
     });
     return { type: "single", data: summarizeUsage(usage, { model: options.model }), schema };
   } finally {

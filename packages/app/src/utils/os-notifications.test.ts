@@ -1,6 +1,5 @@
+import { WEB_NOTIFICATION_CLICK_EVENT } from "@/notification-open";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { BrowserFeedbackNotification } from "@getpaseo/protocol/browser-feedback";
-import type { BrowserCompanionClient } from "@/browser-feedback/companion-client";
 
 interface MockNotificationOptions {
   body?: string;
@@ -35,7 +34,6 @@ const originalGlobals: GlobalSnapshot = {
 async function loadModuleForPlatform(
   platform: "web" | "ios" | "android",
   options?: {
-    companion?: Pick<BrowserCompanionClient, "send"> | null;
     desktopHost?: {
       notification?: {
         sendNotification?: (payload: {
@@ -51,9 +49,6 @@ async function loadModuleForPlatform(
   vi.doMock("react-native", () => ({ Platform: { OS: platform } }));
   vi.doMock("@/desktop/host", () => ({
     getDesktopHost: () => options?.desktopHost ?? null,
-  }));
-  vi.doMock("@/browser-feedback/companion-client", () => ({
-    getBrowserCompanion: () => options?.companion ?? null,
   }));
   vi.doMock("expo-asset", () => ({
     Asset: {
@@ -100,137 +95,121 @@ describe("sendOsNotification", () => {
 
   afterEach(() => {
     vi.doUnmock("react-native");
-    vi.doUnmock("@/browser-feedback/companion-client");
     vi.restoreAllMocks();
     vi.resetModules();
     restoreGlobals();
   });
 
-  it.each(["finished", "permission"])(
-    "closes a %s notification when the app handles its click",
-    async (reason) => {
-      const created: MockNotificationInstance[] = [];
+  it("dispatches a click event that the app can handle", async () => {
+    const created: MockNotificationInstance[] = [];
 
-      class MockNotification implements MockNotificationInstance {
-        static permission = "granted";
-        static requestPermission = vi.fn(async () => "granted");
-        clickListeners: Array<(event: Event) => void> = [];
-        close = vi.fn();
+    class MockNotification implements MockNotificationInstance {
+      static permission = "granted";
+      static requestPermission = vi.fn(async () => "granted");
+      clickListeners: Array<(event: Event) => void> = [];
+      close = vi.fn();
 
-        constructor(
-          public title: string,
-          public options?: MockNotificationOptions,
-        ) {
-          created.push(this);
-        }
-
-        addEventListener(event: string, listener: (event: Event) => void): void {
-          if (event === "click") {
-            this.clickListeners.push(listener);
-          }
-        }
+      constructor(
+        public title: string,
+        public options?: MockNotificationOptions,
+      ) {
+        created.push(this);
       }
 
-      const dispatchEvent = vi.fn((event: unknown) => {
-        void event;
-        return false;
-      });
-      const assign = vi.fn();
-
-      (globalThis as { Notification?: unknown }).Notification = MockNotification;
-      (globalThis as { dispatchEvent?: unknown }).dispatchEvent = dispatchEvent;
-      (globalThis as { location?: unknown }).location = { assign };
-
-      const { sendOsNotification, WEB_NOTIFICATION_CLICK_EVENT } =
-        await loadModuleForPlatform("web");
-
-      const sent = await sendOsNotification({
-        title: "Agent finished",
-        body: "Done",
-        data: { serverId: "srv-1", agentId: "agent-1", reason },
-      });
-
-      expect(sent).toBe(true);
-      expect(created).toHaveLength(1);
-
-      const clicked = created[0];
-      expect(clicked.clickListeners).toHaveLength(1);
-      clicked.clickListeners[0]?.({} as Event);
-
-      expect(clicked.close).toHaveBeenCalledTimes(1);
-      expect(dispatchEvent).toHaveBeenCalledTimes(1);
-      const event = dispatchEvent.mock.calls[0]?.[0] as {
-        type?: string;
-        detail?: { data?: Record<string, unknown> };
-      };
-      expect(event?.type).toBe(WEB_NOTIFICATION_CLICK_EVENT);
-      expect(event?.detail).toEqual({
-        data: { serverId: "srv-1", agentId: "agent-1", reason },
-      });
-      expect(assign).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["finished", "permission"])(
-    "closes a %s notification before fallback navigation",
-    async (reason) => {
-      const created: MockNotificationInstance[] = [];
-
-      class MockNotification implements MockNotificationInstance {
-        static permission = "granted";
-        static requestPermission = vi.fn(async () => "granted");
-        clickListeners: Array<(event: Event) => void> = [];
-        close = vi.fn();
-
-        constructor(
-          public title: string,
-          public options?: MockNotificationOptions,
-        ) {
-          created.push(this);
-        }
-
-        addEventListener(event: string, listener: (event: Event) => void): void {
-          if (event === "click") {
-            this.clickListeners.push(listener);
-          }
+      addEventListener(event: string, listener: (event: Event) => void): void {
+        if (event === "click") {
+          this.clickListeners.push(listener);
         }
       }
+    }
 
-      const dispatchEvent = vi.fn((event: unknown) => {
-        void event;
-        return true;
-      });
-      const assign = vi.fn();
+    const dispatchEvent = vi.fn((event: unknown) => {
+      void event;
+      return false;
+    });
+    const assign = vi.fn();
 
-      (globalThis as { Notification?: unknown }).Notification = MockNotification;
-      (globalThis as { dispatchEvent?: unknown }).dispatchEvent = dispatchEvent;
-      (globalThis as { location?: unknown }).location = { assign };
+    (globalThis as { Notification?: unknown }).Notification = MockNotification;
+    (globalThis as { dispatchEvent?: unknown }).dispatchEvent = dispatchEvent;
+    (globalThis as { location?: unknown }).location = { assign };
 
-      const { sendOsNotification } = await loadModuleForPlatform("web");
+    const { sendOsNotification } = await loadModuleForPlatform("web");
 
-      await sendOsNotification({
-        title: "Agent finished",
-        data: {
-          serverId: "srv with space",
-          workspaceId: "workspace-1",
-          agentId: "agent/1",
-          reason,
-        },
-      });
+    const sent = await sendOsNotification({
+      title: "Agent finished",
+      body: "Done",
+      data: { serverId: "srv-1", agentId: "agent-1" },
+    });
 
-      const clicked = created[0];
-      expect(clicked.clickListeners).toHaveLength(1);
-      clicked.clickListeners[0]?.({} as Event);
+    expect(sent).toBe(true);
+    expect(created).toHaveLength(1);
 
-      expect(clicked.close).toHaveBeenCalledTimes(1);
-      expect(clicked.close.mock.invocationCallOrder[0]).toBeLessThan(
-        assign.mock.invocationCallOrder[0]!,
-      );
-      expect(assign).toHaveBeenCalledWith(
-        "/h/srv%20with%20space/workspace/workspace-1?open=agent%3Aagent%2F1",
-      );
-    },
-  );
+    const clicked = created[0];
+    expect(clicked.clickListeners).toHaveLength(1);
+    clicked.clickListeners[0]?.({} as Event);
+
+    expect(dispatchEvent).toHaveBeenCalledTimes(1);
+    const event = dispatchEvent.mock.calls[0]?.[0] as {
+      type?: string;
+      detail?: { data?: Record<string, unknown> };
+    };
+    expect(event?.type).toBe(WEB_NOTIFICATION_CLICK_EVENT);
+    expect(event?.detail).toEqual({
+      data: { serverId: "srv-1", agentId: "agent-1" },
+    });
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("leaves navigation to the app when no listener handles the click", async () => {
+    const created: MockNotificationInstance[] = [];
+
+    class MockNotification implements MockNotificationInstance {
+      static permission = "granted";
+      static requestPermission = vi.fn(async () => "granted");
+      clickListeners: Array<(event: Event) => void> = [];
+      close = vi.fn();
+
+      constructor(
+        public title: string,
+        public options?: MockNotificationOptions,
+      ) {
+        created.push(this);
+      }
+
+      addEventListener(event: string, listener: (event: Event) => void): void {
+        if (event === "click") {
+          this.clickListeners.push(listener);
+        }
+      }
+    }
+
+    const dispatchEvent = vi.fn((event: unknown) => {
+      void event;
+      return true;
+    });
+    const assign = vi.fn();
+
+    (globalThis as { Notification?: unknown }).Notification = MockNotification;
+    (globalThis as { dispatchEvent?: unknown }).dispatchEvent = dispatchEvent;
+    (globalThis as { location?: unknown }).location = { assign };
+
+    const { sendOsNotification } = await loadModuleForPlatform("web");
+
+    await sendOsNotification({
+      title: "Agent finished",
+      data: {
+        serverId: "srv with space",
+        workspaceId: "workspace-1",
+        agentId: "agent/1",
+      },
+    });
+
+    const clicked = created[0];
+    expect(clicked.clickListeners).toHaveLength(1);
+    clicked.clickListeners[0]?.({} as Event);
+
+    expect(assign).not.toHaveBeenCalled();
+  });
 
   it("returns false when the Notification API is unavailable", async () => {
     (globalThis as { Notification?: unknown }).Notification = undefined;
@@ -306,112 +285,5 @@ describe("sendOsNotification", () => {
       body: "If you can see this, desktop notifications work.",
       data: { serverId: "srv-1" },
     });
-  });
-
-  const feedback: BrowserFeedbackNotification = {
-    id: "server-1-agent-1-turn-1",
-    identity: { serverId: "server-1", agentId: "agent-1", workspaceId: "workspace-1" },
-    reason: "finished",
-    title: "Agent 1 finished",
-    body: "Completed the task",
-    createdAt: "2026-09-06T12:00:00.000Z",
-  };
-
-  function recordWebNotifications() {
-    const created: string[] = [];
-    class BrowserNotification {
-      static permission = "granted";
-      constructor(title: string) {
-        created.push(title);
-      }
-      addEventListener(): void {}
-    }
-    (globalThis as { Notification?: unknown }).Notification = BrowserNotification;
-    return created;
-  }
-
-  it.each(["accepted", "suppressed", "duplicate"] as const)(
-    "does not call the Web Notification API when the companion returns %s",
-    async (status) => {
-      const created = recordWebNotifications();
-      const send = vi.fn<BrowserCompanionClient["send"]>().mockResolvedValue({
-        source: "paseo-browser-companion",
-        version: 1,
-        type: "delivery",
-        requestId: "request-1",
-        status,
-        error: null,
-      });
-      const { sendOsNotification } = await loadModuleForPlatform("web", { companion: { send } });
-
-      expect(await sendOsNotification({ title: feedback.title, browserFeedback: feedback })).toBe(
-        true,
-      );
-      expect(send).toHaveBeenCalledExactlyOnceWith(feedback);
-      expect(created).toEqual([]);
-    },
-  );
-
-  it("does not fall back after a companion delivery timeout that may have reached Chrome", async () => {
-    const created = recordWebNotifications();
-    const send = vi.fn<BrowserCompanionClient["send"]>().mockResolvedValue({
-      source: "paseo-browser-companion",
-      version: 1,
-      type: "delivery",
-      requestId: "request-1",
-      status: "failed",
-      error: "Acknowledgement timed out",
-    });
-    const { sendOsNotification } = await loadModuleForPlatform("web", { companion: { send } });
-
-    expect(await sendOsNotification({ title: feedback.title, browserFeedback: feedback })).toBe(
-      false,
-    );
-    expect(send).toHaveBeenCalledExactlyOnceWith(feedback);
-    expect(created).toEqual([]);
-  });
-
-  it("propagates a companion send rejection without a duplicate browser fallback", async () => {
-    const created = recordWebNotifications();
-    const send = vi
-      .fn<BrowserCompanionClient["send"]>()
-      .mockRejectedValue(new Error("Disconnected"));
-    const { sendOsNotification } = await loadModuleForPlatform("web", { companion: { send } });
-
-    await expect(
-      sendOsNotification({ title: feedback.title, browserFeedback: feedback }),
-    ).rejects.toThrow("Disconnected");
-    expect(created).toEqual([]);
-  });
-
-  it("retains the stock browser notification when the companion never handshakes", async () => {
-    const created = recordWebNotifications();
-    const send = vi
-      .fn<BrowserCompanionClient["send"]>()
-      .mockResolvedValue({ status: "unavailable" });
-    const { sendOsNotification } = await loadModuleForPlatform("web", { companion: { send } });
-
-    expect(await sendOsNotification({ title: feedback.title, browserFeedback: feedback })).toBe(
-      true,
-    );
-    expect(send).toHaveBeenCalledExactlyOnceWith(feedback);
-    expect(created).toEqual([feedback.title]);
-  });
-
-  it("preserves desktop notification delivery without invoking the browser companion", async () => {
-    const created = recordWebNotifications();
-    const send = vi.fn<BrowserCompanionClient["send"]>();
-    const sendNotification = vi.fn(async () => true);
-    const { sendOsNotification } = await loadModuleForPlatform("web", {
-      companion: { send },
-      desktopHost: { notification: { sendNotification } },
-    });
-
-    expect(await sendOsNotification({ title: feedback.title, browserFeedback: feedback })).toBe(
-      true,
-    );
-    expect(sendNotification).toHaveBeenCalledTimes(1);
-    expect(send).not.toHaveBeenCalled();
-    expect(created).toEqual([]);
   });
 });

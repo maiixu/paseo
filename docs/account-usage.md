@@ -30,22 +30,14 @@ route is read on every request, independently of the one-minute account quota
 cache. Existing untracked threads identify the router's original-account policy;
 missing thread identity and unreadable ledgers are explicitly distinguished.
 
-The tooltip polls every thirty seconds while open. The poll is served from the
-daemon's caches: five minutes for provider usage, one minute per routed account.
-The tooltip's Refresh action sends `forceRefresh`, which bypasses both caches once they
-are thirty seconds old; inside that floor it is served from the cache, so repeated presses
-cannot run into provider rate limits. The poll never forces. Daemons without the flag
-ignore it and serve cached usage.
-Account windows display remaining allowance and the duration returned by the provider, with an update
-age. A failed refresh identifies retained data rather than presenting it as fresh: when a
-provider fetch fails (network error, rate limit, timeout), the daemon keeps that provider's
-last successful entry with its own `fetchedAt` and an `error` naming the failure, so
-freshness checks treat it as stale instead of replacing it with an empty error entry.
-The request and response fields are optional: older clients retain their ordinary
-provider card, and hosts without a router keep their existing single-account view.
+The context tooltip uses the host's usage report cards. Each route account has
+its own card and refresh control where the tooltip is interactive. The server
+streams the routed account reports through the same API as plugin reports.
+The legacy usage RPC retains its thirty-second minimum refresh interval and
+last successful snapshots, with the original fetch time, when a refresh fails.
 An account's percentage is never added to another account's percentage.
 
-Use `paseo usage --agent <full-id> --json` or the agent's `get_usage` tool for a
+Use `paseo usage summary --agent <full-id> --json` or the agent's `get_usage` tool for a
 planning snapshot. `available` provider status is not task admission. Empty,
 stale and invalid account observations remain unknown; an exhausted window
 cannot be offset by another window or account. The output never pools allowance.
@@ -71,8 +63,8 @@ worker observation does not prove that an old process adopted a live pause.
 Every new agent, whether created from the app, `paseo run`, or an agent's
 `create_agent` tool, records the selected provider/model and pre-inference usage
 snapshot in `resource-decisions/decisions.jsonl` under the owning daemon home.
-The `dispatch` row is written before the initial prompt runs, with `observationState:
-"pending"`, so every later state transition has a base. Usage discovery does not block
+The journal queues the `dispatch` row before the initial prompt runs, with
+`observationState: "pending"`, then writes subsequent state transitions in order. Usage discovery does not block
 creation: its result follows as a separate `observation` row, folded with the agent's
 model, or `unavailable` with `unavailableReason` `error` or `timeout` (twenty seconds).
 The snapshot reads the same enabled usage sources as the usage RPC.

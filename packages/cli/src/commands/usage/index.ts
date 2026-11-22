@@ -4,11 +4,13 @@ import type { UsageReportEntry } from "@getpaseo/protocol/messages";
 import { connectToDaemon, type ConnectOptions } from "../../utils/client.js";
 import { addJsonAndDaemonHostOptions } from "../../utils/command-options.js";
 import { withOutput, type CommandOptions, type CommandResult } from "../../output/index.js";
+import { runUsageSummary } from "../usage.js";
 import { usageSchema } from "./presentation.js";
 
 interface UsageOptions extends CommandOptions {
   agent?: string;
   refresh?: boolean;
+  model?: string;
 }
 
 type UsageSelection = { kind: "list" } | { kind: "inspect"; id: string };
@@ -78,9 +80,13 @@ export function createUsageCommand(): Command {
   ).option("--model <id>", "Include windows for this model in the planning summary");
   const list = (options: CommandOptions, _command: Command) =>
     runUsageCommand(options, { kind: "list" });
-  usage.action(withOutput(list));
+  const listAction = withOutput(list);
+  const summaryAction = withOutput(runUsageSummary);
+  usage.action((options: UsageOptions, command: Command) =>
+    options.model ? summaryAction(options, command) : listAction(options, command),
+  );
   addListOptions(usage.command("ls").description("List account quotas and balances")).action(
-    withOutput(list),
+    listAction,
   );
   addJsonAndDaemonHostOptions(
     usage
@@ -93,5 +99,8 @@ export function createUsageCommand(): Command {
       runUsageCommand(options, { kind: "inspect", id }),
     ),
   );
+  addListOptions(usage.command("summary").description("Summarize observed allowance for planning"))
+    .option("--model <id>", "Include windows for this model in the planning summary")
+    .action(summaryAction);
   return usage;
 }

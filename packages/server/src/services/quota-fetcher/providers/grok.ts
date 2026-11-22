@@ -1,4 +1,4 @@
-import { existsSync, promises as fs } from "node:fs";
+import * as fs from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Logger } from "pino";
@@ -171,7 +171,7 @@ export class GrokQuotaProvider implements ProviderUsageFetcher {
   private async readGrokToken(): Promise<string | null> {
     // homeDir override is for tests: Windows os.homedir() ignores $HOME (uses USERPROFILE).
     const path = join(this.homeDir ?? homedir(), ".grok", "auth.json");
-    if (!existsSync(path)) return null;
+
     try {
       return extractGrokTokenFromAuth(JSON.parse(await fs.readFile(path, "utf8")));
     } catch {

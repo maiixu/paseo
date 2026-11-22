@@ -26,10 +26,15 @@ export function AgentUsage({
   /** Whether each card has a Refresh button; a surface that cannot be pressed hides it. */
   refreshable: boolean;
 }) {
-  const provider = useSessionStore(
-    (state) => state.sessions[serverId]?.agents.get(agentId)?.provider,
-  );
-  if (provider === "codex")
+  const useLegacyCodexUsage = useSessionStore((state) => {
+    const session = state.sessions[serverId];
+    return (
+      session?.agents.get(agentId)?.provider === "codex" &&
+      session.serverInfo?.features?.providerUsageList === true &&
+      session.serverInfo.features.usageSources !== true
+    );
+  });
+  if (useLegacyCodexUsage)
     return <RoutedCodexUsage serverId={serverId} agentId={agentId} refreshable={refreshable} />;
   return <PluginAgentUsage serverId={serverId} agentId={agentId} refreshable={refreshable} />;
 }

@@ -1,5 +1,3 @@
-import type { Agent } from "@/stores/session-store";
-import { getIsElectron } from "@/constants/platform";
 import { useEffect, useMemo, useState } from "react";
 import { AppState } from "react-native";
 import { DaemonConnectionError, type DaemonClient } from "@getpaseo/client/internal/daemon-client";
@@ -18,7 +16,6 @@ interface UseAgentAttentionClearParams {
   requiresAttention: boolean;
   attentionReason: AttentionReason;
   isScreenFocused: boolean;
-  agentStatus: Agent["status"] | null;
   focusRequest: object | null;
   onError: (error: unknown) => void;
 }
@@ -36,7 +33,6 @@ export function useAgentAttentionClear({
   requiresAttention,
   attentionReason,
   isScreenFocused,
-  agentStatus,
   focusRequest,
   onError,
 }: UseAgentAttentionClearParams): AgentAttentionClearController {
@@ -104,29 +100,6 @@ export function useAgentAttentionClear({
     requiresAttention,
     attentionReason,
     focusRequest,
-  ]);
-
-  useEffect(() => {
-    if (
-      isWeb &&
-      !getIsElectron() &&
-      isScreenFocused &&
-      isAppVisible &&
-      isAgentDataReady &&
-      agentStatus === "idle" &&
-      requiresAttention &&
-      attentionReason === "finished"
-    ) {
-      controller.focus();
-    }
-  }, [
-    controller,
-    isScreenFocused,
-    isAppVisible,
-    isAgentDataReady,
-    agentStatus,
-    requiresAttention,
-    attentionReason,
   ]);
 
   return {

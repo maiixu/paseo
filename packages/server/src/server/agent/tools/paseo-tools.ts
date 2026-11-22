@@ -1,5 +1,7 @@
 import { summarizeUsage } from "@getpaseo/protocol/usage-summary";
 import type { ProviderUsageListResult } from "../../../services/quota-fetcher/service.js";
+import type { ChangeRequestWatches } from "../change-request-watches/index.js";
+import { changeRequestStatusSchema } from "../../../services/change-request-source.js";
 import { registerPluginTools } from "./plugin-tools.js";
 import type { FinishSubscriptions, FinishRegistration } from "../finish-subscriptions/index.js";
 import type { AgentMessageDelivery } from "../agent-messages/index.js";
@@ -18,7 +20,11 @@ import type { Logger } from "pino";
 
 import type { AgentMode, AgentProvider, AgentSessionConfig } from "../agent-sdk-types.js";
 import type { AgentManager, ManagedAgent } from "../agent-manager.js";
-import { ActiveTurnBehaviorSchema, AgentProfileSchema } from "@getpaseo/protocol/messages";
+import {
+  ActiveTurnBehaviorSchema,
+  AgentActiveTurnBehaviorSchema,
+  AgentProfileSchema,
+} from "@getpaseo/protocol/messages";
 import type { DaemonConfigStore } from "../../daemon-config-store.js";
 import { featuresFromControls } from "@getpaseo/protocol/option-controls";
 import {
@@ -35,7 +41,7 @@ import {
   toAgentPayload,
 } from "../agent-projections.js";
 import { summarizeAgentActivity } from "../activity-curator.js";
-import type { AgentStorage } from "../agent-storage.js";
+import type { AgentStorage, StoredAgentRecord } from "../agent-storage.js";
 import { AgentNotFoundError, ensureAgentLoaded } from "../agent-loading.js";
 import { isStoredAgentProviderAvailable } from "../../persistence-hooks.js";
 import {
@@ -124,6 +130,7 @@ export interface PaseoToolHostDependencies {
   recordResourceDecision?: CreateAgentCommandDependencies["recordResourceDecision"];
   getResourceUsage?: (agentId?: string) => Promise<ProviderUsageListResult>;
   agentMessages?: () => AgentMessageDelivery;
+  changeRequestWatches?: ChangeRequestWatches;
   finishSubscriptions?: () => FinishSubscriptions;
   serverId?: string;
   hosts?: () => ToolHosts;
@@ -140,6 +147,9 @@ export interface PaseoToolHostDependencies {
     "getSnapshot" | "listWorktrees" | "resolveRepoRoot" | "invalidateWorktrees"
   >;
   findWorkspaceIdForCwd?: ArchiveDependencies["findWorkspaceIdForCwd"];
+  worktreeManagers?: ArchiveDependencies["worktreeManagers"];
+  workspaceArchiveOperations?: ArchiveDependencies["workspaceArchiveOperations"];
+  isCheckoutUntrusted?: ArchiveDependencies["isCheckoutUntrusted"];
   listActiveWorkspaces?: ArchiveDependencies["listActiveWorkspaces"];
   archiveWorkspaceRecord?: ArchiveDependencies["archiveWorkspaceRecord"];
   emitWorkspaceUpdatesForWorkspaceIds?: ArchiveDependencies["emitWorkspaceUpdatesForWorkspaceIds"];
@@ -1284,15 +1294,15 @@ function createToolCatalog(
     .object(legacyTopLevelCreateAgentInputSchema)
     .strict();
   const commonSendAgentPromptInputSchema = {
-    activeTurnBehavior: ActiveTurnBehaviorSchema.optional().describe(
-      'How to send into a running turn: "steer" joins it, falling back to interrupt when unavailable; "interrupt" replaces it. Defaults to steer for agent callers and interrupt otherwise.',
-    ),
     agentId: z.string(),
     prompt: z.string(),
     sessionMode: z.string().optional().describe("Optional mode to set before running the prompt."),
   };
   const agentToAgentSendAgentPromptInputSchema = {
     ...commonSendAgentPromptInputSchema,
+    activeTurnBehavior: AgentActiveTurnBehaviorSchema.optional().describe(
+      'Leave this out unless the message cannot wait. Default "queue": the message waits until the agent\'s running turn ends. "steer": the message joins the running turn; a provider that cannot steer interrupts the turn instead. "interrupt": the running turn stops and a new turn starts with the message. A steer or interrupt carries the messages you queued before it, in order.',
+    ),
     notifyOnFinish: z
       .boolean()
       .optional()
@@ -1303,6 +1313,9 @@ function createToolCatalog(
   };
   const topLevelSendAgentPromptInputSchema = {
     ...commonSendAgentPromptInputSchema,
+    activeTurnBehavior: ActiveTurnBehaviorSchema.optional().describe(
+      'Default "interrupt": the running turn stops and a new turn starts with the prompt. "steer": the prompt joins the running turn; a provider that cannot steer interrupts the turn instead.',
+    ),
     notifyOnFinish: z
       .boolean()
       .optional()
@@ -1973,13 +1986,16 @@ function createToolCatalog(
     {
       title: "Send agent prompt",
       description:
-        "Send a task. Agent callers receive an immediate queued receipt; delivery follows after two quiet seconds per recipient. Completion reports include the target’s last response by default. Paseo supplies caller identity.",
+        scope === "agent"
+          ? "Send a message to another agent. The response returns at once. Its guidance says whether the message waits for the running turn to end, joins it, or interrupts it, and how to deliver a waiting message now. Leave activeTurnBehavior out unless the message cannot wait. The recipient reads your messages in the order you sent them. A steer the recipient has not read is lost if its turn stops or is interrupted, along with the messages it carried. Completion reports include the target’s last response by default. Paseo supplies caller identity."
+          : "Send a prompt to an agent. A running turn is interrupted unless activeTurnBehavior is steer.",
       inputSchema: sendAgentPromptInputSchema,
       outputSchema: {
         success: z.boolean(),
         disposition: z.enum(["turn_started", "out_of_band", "steered"]).optional(),
         deliveryStatus: z.literal("queued").optional(),
         messageId: z.string().optional(),
+        activeTurnBehavior: AgentActiveTurnBehaviorSchema.optional(),
         status: AgentStatusEnum,
         guidance: z.string().optional(),
       },
@@ -1989,7 +2005,7 @@ function createToolCatalog(
       prompt,
       sessionMode,
       notifyOnFinish = Boolean(callerAgentId),
-      activeTurnBehavior = callerAgentId ? "steer" : "interrupt",
+      activeTurnBehavior,
     }) => {
       if (callerAgentId && !agentManager.getAgent(agentId) && !(await agentStorage.get(agentId))) {
         throw new PaseoToolInputError(`Agent ${agentId} not found`);
@@ -2048,15 +2064,17 @@ function createToolCatalog(
             success: true,
             deliveryStatus: receipt.status,
             messageId: receipt.messageId,
+            activeTurnBehavior: receipt.activeTurnBehavior,
             status: agentManager.getAgent(agentId)?.lifecycle ?? "idle",
             guidance: notifying
-              ? `Queued for delivery after two quiet seconds. ${PROMPTED_AGENT_NOTIFICATION_GUIDANCE}`
-              : "Queued for delivery after two quiet seconds; provider dispatch has not occurred.",
+              ? `${receipt.guidance} ${PROMPTED_AGENT_NOTIFICATION_GUIDANCE}`
+              : receipt.guidance,
           },
         };
       }
 
-      const { disposition } = await sendPromptToAgent({
+      const dispatch = await sendPromptToAgent({
+        agentMessages: agentMessages(),
         agentManager,
         agentStorage,
         agentId,
@@ -2075,11 +2093,14 @@ function createToolCatalog(
       });
 
       // Return once the provider has accepted the turn, so the status reports it running.
-      if (disposition === "turn_started") {
-        await waitForAgentRunStartWithTimeout(agentManager, agentId).catch((error) => {
-          rejectNotification();
-          throw error;
-        });
+      const { disposition } = dispatch;
+      if (dispatch.disposition === "turn_started") {
+        await waitForAgentRunStartWithTimeout(agentManager, agentId, dispatch.started).catch(
+          (error) => {
+            rejectNotification();
+            throw error;
+          },
+        );
       }
       const currentSnapshot = agentManager.getAgent(agentId);
 
@@ -2106,6 +2127,15 @@ function createToolCatalog(
     const snapshot = await serializeSnapshotWithMetadata(agentStorage, agent, childLogger);
     const backgroundWork = agentManager.getAgentBackgroundWorkSummary(agent.id);
     return backgroundWork ? { ...snapshot, backgroundWork } : snapshot;
+  }
+
+  function projectStoredAgent(record: StoredAgentRecord) {
+    return buildStoredAgentPayload(
+      record,
+      new Set(providerSnapshotManager.listRegisteredProviderIds()),
+      (provider, own) => agentManager.effectiveOptionsFor(provider, own),
+      agentManager.getAgentBackgroundWorkSummary(record.id),
+    );
   }
 
   registerTool(
@@ -2140,11 +2170,7 @@ function createToolCatalog(
         throw new PaseoToolInputError(`Agent ${agentId} not found`);
       }
 
-      const structuredSnapshot = buildStoredAgentPayload(
-        record,
-        new Set(providerSnapshotManager.listRegisteredProviderIds()),
-        (provider, own) => agentManager.effectiveOptionsFor(provider, own),
-      );
+      const structuredSnapshot = projectStoredAgent(record);
       return {
         content: [],
         structuredContent: ensureValidJson({
@@ -2194,12 +2220,7 @@ function createToolCatalog(
         storage: agentStorage,
         workspaces: options.workspaceRegistry,
         projectLive: projectLiveAgent,
-        projectStored: (record) =>
-          buildStoredAgentPayload(
-            record,
-            new Set(providerSnapshotManager.listRegisteredProviderIds()),
-            (provider, own) => agentManager.effectiveOptionsFor(provider, own),
-          ),
+        projectStored: projectStoredAgent,
         isProviderVisible: () => true,
         isStoredProviderAvailable: (record) =>
           isStoredAgentProviderAvailable(
@@ -2724,6 +2745,67 @@ function createToolCatalog(
       };
     },
   );
+
+  if (options.changeRequestWatches) {
+    const watches = options.changeRequestWatches;
+    const inputSchema = {
+      url: z
+        .string()
+        .trim()
+        .min(1)
+        .describe("URL of a pull request or merge request on a supported forge."),
+    };
+    registerTool(
+      "subscribe_change_request",
+      {
+        title: "Watch change request",
+        description:
+          "Watch a pull request or merge request for check failures, passing checks, new comments, reviews, approvals, and closure. Returns the current state and sends future updates after your current turn.",
+        inputSchema,
+        outputSchema: {
+          url: z.string(),
+          ...changeRequestStatusSchema.shape,
+          subscribed: z.boolean(),
+          stale: z
+            .boolean()
+            .describe("The last stored status is shown because a fresh read is pending or failed."),
+        },
+      },
+      async ({ url }) => {
+        if (!callerAgentId) {
+          throw new PaseoToolInputError(
+            "subscribe_change_request requires an agent-scoped session",
+          );
+        }
+        resolveCallerAgent();
+        return {
+          content: [],
+          structuredContent: ensureValidJson(await watches.subscribe(callerAgentId, url)),
+        };
+      },
+    );
+    registerTool(
+      "unsubscribe_change_request",
+      {
+        title: "Stop watching change request",
+        description: "Stop your watch and discard its unsent updates.",
+        inputSchema,
+        outputSchema: { url: z.string(), removed: z.boolean() },
+      },
+      async ({ url }) => {
+        if (!callerAgentId) {
+          throw new PaseoToolInputError(
+            "unsubscribe_change_request requires an agent-scoped session",
+          );
+        }
+        resolveCallerAgent();
+        return {
+          content: [],
+          structuredContent: ensureValidJson(await watches.unsubscribe(callerAgentId, url)),
+        };
+      },
+    );
+  }
 
   registerTool(
     "create_heartbeat",
@@ -3404,11 +3486,17 @@ function archiveWorktreeDependencies(
   return {
     paseoHome: options.paseoHome,
     paseoWorktreesBaseRoot: options.worktreesRoot,
+    worktreeManagers: options.worktreeManagers,
+    workspaceArchiveOperations: options.workspaceArchiveOperations,
+    isCheckoutUntrusted: options.isCheckoutUntrusted,
     github: options.github,
     workspaceGitService: options.workspaceGitService,
     agentManager: context.agentManager,
     agentStorage: context.agentStorage,
     findWorkspaceIdForCwd: options.findWorkspaceIdForCwd,
+    ...(options.workspaceRegistry
+      ? { getWorkspace: (workspaceId: string) => options.workspaceRegistry!.get(workspaceId) }
+      : {}),
     listActiveWorkspaces: options.listActiveWorkspaces,
     archiveWorkspaceRecord: options.archiveWorkspaceRecord,
     emitWorkspaceUpdatesForWorkspaceIds: options.emitWorkspaceUpdatesForWorkspaceIds,

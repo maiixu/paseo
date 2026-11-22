@@ -15,7 +15,7 @@ export interface UsageSourceEnablement {
   isEnabled(sourceId: string): boolean;
   agentProvider?(agentId: string): string | undefined;
   listAntigravity?(options: {
-    sourceId: "antigravity";
+    sourceId: "antigravity" | "antigravity-cli";
     agentId?: string;
     forceRefresh?: boolean;
   }): Promise<UsageReportEntry[]>;
@@ -102,7 +102,11 @@ export class ProviderUsageService {
       windows: [],
     };
     if (!this.usageSources.listAntigravity) return null;
-    if (!this.usageSources.isEnabled(base.providerId))
+    // The personal usage plugin and the built-in CLI source may coexist.
+    const usageSourceId = this.usageSources.isEnabled("antigravity")
+      ? "antigravity"
+      : "antigravity-cli";
+    if (!this.usageSources.isEnabled(usageSourceId))
       return {
         ...base,
         status: "unavailable",
@@ -118,7 +122,7 @@ export class ProviderUsageService {
       // coalesces fetches and can finish warming its cache after this caller returns.
       const reports = await withTimeout(
         this.usageSources.listAntigravity({
-          sourceId: "antigravity",
+          sourceId: usageSourceId,
           agentId: sessionId,
           forceRefresh,
         }),
@@ -126,7 +130,7 @@ export class ProviderUsageService {
         "Quota source timed out",
       );
       const accounts = reports
-        .filter((entry) => entry.sourceId === base.providerId)
+        .filter((entry) => entry.sourceId === usageSourceId)
         .map((entry) => ({
           providerId: base.providerId,
           displayName: base.displayName,

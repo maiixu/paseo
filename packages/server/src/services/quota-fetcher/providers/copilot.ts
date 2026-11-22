@@ -1,4 +1,4 @@
-import { existsSync, promises as fs } from "node:fs";
+import * as fs from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Logger } from "pino";
@@ -25,7 +25,6 @@ async function readGithubCliToken(): Promise<string | null> {
   candidates.push(join(homedir(), ".config", "gh", "hosts.yml"));
 
   for (const path of candidates) {
-    if (!existsSync(path)) continue;
     try {
       const raw = await fs.readFile(path, "utf8");
       const match = raw.match(/oauth_token:\s*["']?([a-zA-Z0-9_-]+)["']?/);
