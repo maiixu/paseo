@@ -1,3 +1,7 @@
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
 import type { SessionConfigOption } from "@agentclientprotocol/sdk";
 import { describe, expect, test, vi } from "vitest";
 
@@ -8,7 +12,12 @@ import {
   DEFAULT_ACP_CAPABILITIES,
   deriveModelDefinitionsFromACP,
 } from "./acp-agent.js";
-import { AntigravityACPAgentClient } from "./antigravity-acp-agent.js";
+import {
+  AntigravityACPAgentClient,
+  buildAntigravitySystemPromptAppend,
+  resolveAntigravityInstructionSources,
+  resolveAntigravitySessionMeta,
+} from "./antigravity-acp-agent.js";
 
 function groupedModelOption(currentValue: string): SessionConfigOption {
   return {
@@ -234,6 +243,245 @@ describe("AntigravityACPAgentClient grouped models and thinking levels", () => {
     expect((await session.getRuntimeInfo()).thinkingOptionId).toBe("medium");
     expect(events).toContain("thinking:medium");
 
+    await session.close();
+  });
+});
+
+describe("AntigravityACPAgentClient system prompt rule injection", () => {
+  test("collects global GEMINI.md/rules and workspace AGENTS.md deduplicated by realpath", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "paseo-agy-rules-"));
+    try {
+      const homeDir = path.join(root, "home");
+      const geminiConfigDir = path.join(homeDir, ".gemini", "config");
+      const geminiRulesDir = path.join(geminiConfigDir, "rules");
+      const repoDir = path.join(root, "repo");
+      const subDir = path.join(repoDir, "packages", "sub");
+
+      mkdirSync(geminiRulesDir, { recursive: true });
+      mkdirSync(path.join(repoDir, ".git"), { recursive: true });
+      mkdirSync(subDir, { recursive: true });
+
+      const sharedGlobal = path.join(repoDir, "AGENTS.global.md");
+      writeFileSync(sharedGlobal, "GLOBAL_RULE_LINE");
+      symlinkSync(sharedGlobal, path.join(geminiConfigDir, "GEMINI.md"));
+      symlinkSync(sharedGlobal, path.join(geminiRulesDir, "AGENTS.md"));
+      writeFileSync(path.join(geminiRulesDir, "extra.md"), "EXTRA_RULE_LINE");
+
+      const repoAgents = path.join(repoDir, "AGENTS.md");
+      writeFileSync(repoAgents, "REPO_ROOT_RULE");
+      symlinkSync(repoAgents, path.join(repoDir, "GEMINI.md"));
+      writeFileSync(path.join(subDir, "AGENTS.md"), "SUBDIR_RULE");
+
+      const sources = await resolveAntigravityInstructionSources({
+        cwd: subDir,
+        homeDir,
+      });
+
+      expect(sources.map((s) => s.content)).toEqual([
+        "GLOBAL_RULE_LINE",
+        "EXTRA_RULE_LINE",
+        "REPO_ROOT_RULE",
+        "SUBDIR_RULE",
+      ]);
+
+      const meta = await resolveAntigravitySessionMeta({
+        cwd: subDir,
+        env: { GEMINI_HOME: path.join(homeDir, ".gemini") },
+      });
+      expect(meta).toEqual({
+        antigravity: {
+          systemPrompt: {
+            append: expect.stringContaining("GLOBAL_RULE_LINE"),
+          },
+        },
+      });
+      const append = (meta as { antigravity: { systemPrompt: { append: string } } }).antigravity
+        .systemPrompt.append;
+      expect(append.indexOf("GLOBAL_RULE_LINE")).toBeLessThan(append.indexOf("REPO_ROOT_RULE"));
+      expect(append.indexOf("REPO_ROOT_RULE")).toBeLessThan(append.indexOf("SUBDIR_RULE"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("does not walk outside non-git directories and returns undefined when no rules exist", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "paseo-agy-nogit-"));
+    try {
+      const homeDir = path.join(root, "home");
+      const parentDir = path.join(root, "parent");
+      const childDir = path.join(parentDir, "child");
+      mkdirSync(homeDir, { recursive: true });
+      mkdirSync(childDir, { recursive: true });
+      writeFileSync(path.join(parentDir, "AGENTS.md"), "SHOULD_NOT_LEAK");
+
+      expect(await buildAntigravitySystemPromptAppend({ cwd: childDir, homeDir })).toBeUndefined();
+
+      writeFileSync(path.join(childDir, "AGENTS.md"), "LOCAL_ONLY_RULE");
+      expect(await buildAntigravitySystemPromptAppend({ cwd: childDir, homeDir })).toContain(
+        "LOCAL_ONLY_RULE",
+      );
+      expect(await buildAntigravitySystemPromptAppend({ cwd: childDir, homeDir })).not.toContain(
+        "SHOULD_NOT_LEAK",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("passes _meta on interactive newSession and loadSession, but omits it on catalog probe and history load", async () => {
+    const newSessionSpy = vi.fn().mockResolvedValue({
+      sessionId: "session-meta-1",
+      models: FLAT_MODELS_STATE,
+      configOptions: [groupedModelOption("gemini-3.8-flash"), thinkingOption("high", false)],
+    });
+    const loadSessionSpy = vi.fn().mockResolvedValue({
+      models: FLAT_MODELS_STATE,
+      configOptions: [groupedModelOption("gemini-3.8-flash"), thinkingOption("high", false)],
+    });
+
+    const sessionMetaResolver = vi.fn().mockReturnValue({
+      antigravity: { systemPrompt: { append: "INJECTED_RULES" } },
+    });
+
+    class TestMetaSession extends ACPAgentSession {
+      protected override async spawnProcess(): Promise<SpawnedACPProcess> {
+        return {
+          child: { pid: undefined, kill: vi.fn(), exitCode: 0, signalCode: null, once: vi.fn() },
+          connection: {
+            newSession: newSessionSpy,
+            loadSession: loadSessionSpy,
+            setSessionConfigOption: vi.fn(),
+          },
+          initialize: { agentCapabilities: { loadSession: true } },
+        } as unknown as SpawnedACPProcess;
+      }
+    }
+
+    const newSession = new TestMetaSession(
+      { provider: "acp", cwd: "/tmp/agy-meta-new" },
+      {
+        provider: "acp",
+        logger: createTestLogger(),
+        defaultCommand: ["agy-acp"],
+        defaultModes: [],
+        capabilities: DEFAULT_ACP_CAPABILITIES,
+        sessionMetaResolver,
+      },
+    );
+    await newSession.initializeNewSession();
+    expect(newSessionSpy).toHaveBeenCalledWith({
+      cwd: "/tmp/agy-meta-new",
+      mcpServers: [],
+      _meta: { antigravity: { systemPrompt: { append: "INJECTED_RULES" } } },
+    });
+    await newSession.close();
+
+    const resumedInteractive = new TestMetaSession(
+      { provider: "acp", cwd: "/tmp/agy-meta-resume" },
+      {
+        provider: "acp",
+        logger: createTestLogger(),
+        defaultCommand: ["agy-acp"],
+        defaultModes: [],
+        capabilities: DEFAULT_ACP_CAPABILITIES,
+        handle: { provider: "acp", sessionId: "session-meta-1" },
+        resumePurpose: "interactive",
+        sessionMetaResolver,
+      },
+    );
+    await resumedInteractive.initializeResumedSession();
+    expect(loadSessionSpy).toHaveBeenCalledWith({
+      sessionId: "session-meta-1",
+      cwd: "/tmp/agy-meta-resume",
+      mcpServers: [],
+      _meta: { antigravity: { systemPrompt: { append: "INJECTED_RULES" } } },
+    });
+    await resumedInteractive.close();
+
+    loadSessionSpy.mockClear();
+    const resumedHistory = new TestMetaSession(
+      { provider: "acp", cwd: "/tmp/agy-meta-history" },
+      {
+        provider: "acp",
+        logger: createTestLogger(),
+        defaultCommand: ["agy-acp"],
+        defaultModes: [],
+        capabilities: DEFAULT_ACP_CAPABILITIES,
+        handle: { provider: "acp", sessionId: "session-meta-1" },
+        resumePurpose: "history",
+        sessionMetaResolver,
+      },
+    );
+    await resumedHistory.initializeResumedSession();
+    expect(loadSessionSpy).toHaveBeenCalledWith({
+      sessionId: "session-meta-1",
+      cwd: "/tmp/agy-meta-history",
+      mcpServers: [],
+    });
+    await resumedHistory.close();
+
+    // Catalog probe must NOT send _meta
+    const probeNewSession = vi.fn().mockResolvedValue({
+      sessionId: "probe-1",
+      models: FLAT_MODELS_STATE,
+      configOptions: [groupedModelOption("gemini-3.8-flash"), thinkingOption("high", false)],
+    });
+    const probeSetConfigOption = vi.fn(async ({ value }: { value: string }) => ({
+      configOptions: [groupedModelOption(value), thinkingOption("high", false)],
+    }));
+    const probeClient = createAntigravityClient(
+      async () =>
+        ({
+          child: { kill: vi.fn(), exitCode: 0, signalCode: null, once: vi.fn() },
+          connection: {
+            newSession: probeNewSession,
+            setSessionConfigOption: probeSetConfigOption,
+          },
+          initialize: { agentCapabilities: {} },
+        }) as unknown as SpawnedACPProcess,
+    );
+    await probeClient.fetchCatalog({ scope: "workspace", cwd: "/tmp/agy-meta-probe", force: true });
+    expect(probeNewSession).toHaveBeenCalledWith({
+      cwd: "/tmp/agy-meta-probe",
+      mcpServers: [],
+    });
+  });
+
+  test("continues without _meta if sessionMetaResolver throws", async () => {
+    const newSessionSpy = vi.fn().mockResolvedValue({
+      sessionId: "session-err-1",
+      models: FLAT_MODELS_STATE,
+      configOptions: [groupedModelOption("gemini-3.8-flash"), thinkingOption("high", false)],
+    });
+
+    class TestThrowingMetaSession extends ACPAgentSession {
+      protected override async spawnProcess(): Promise<SpawnedACPProcess> {
+        return {
+          child: { pid: undefined, kill: vi.fn(), exitCode: 0, signalCode: null, once: vi.fn() },
+          connection: { newSession: newSessionSpy, setSessionConfigOption: vi.fn() },
+          initialize: { agentCapabilities: {} },
+        } as unknown as SpawnedACPProcess;
+      }
+    }
+
+    const session = new TestThrowingMetaSession(
+      { provider: "acp", cwd: "/tmp/agy-meta-err" },
+      {
+        provider: "acp",
+        logger: createTestLogger(),
+        defaultCommand: ["agy-acp"],
+        defaultModes: [],
+        capabilities: DEFAULT_ACP_CAPABILITIES,
+        sessionMetaResolver: () => {
+          throw new Error("boom");
+        },
+      },
+    );
+    await session.initializeNewSession();
+    expect(newSessionSpy).toHaveBeenCalledWith({
+      cwd: "/tmp/agy-meta-err",
+      mcpServers: [],
+    });
     await session.close();
   });
 });
