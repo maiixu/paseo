@@ -3047,6 +3047,7 @@ describe("deferTurnOnRunningTools", () => {
         return true;
       },
     });
+    const observedNativeSessionIds: Array<string | undefined> = [];
     const registration = runAcpProvider({
       id: "deferred-daemon",
       label: "Deferred Daemon",
@@ -3055,7 +3056,8 @@ describe("deferTurnOnRunningTools", () => {
         deferTurnOnRunningTools: {
           settleDelayMs: 30,
           quietLimitMs: 500,
-          keepsTurnOpen(toolCall) {
+          keepsTurnOpen(toolCall, context) {
+            observedNativeSessionIds.push(context?.nativeSessionId);
             const input = toolCall.input;
             return !(
               typeof input === "object" &&
@@ -3092,6 +3094,7 @@ describe("deferTurnOnRunningTools", () => {
           event.turnId === "acp:daemon-turn" &&
           event.state === "completed",
       );
+      expect(observedNativeSessionIds).toContain("connector-session");
     } finally {
       await connection.close();
     }

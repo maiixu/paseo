@@ -1869,7 +1869,9 @@ class AcpRuntime {
   private toolKeepsTurnOpen(snapshot: AcpToolCallSnapshot): boolean {
     const defer = this.options.options.acpOptions?.deferTurnOnRunningTools;
     if (!defer) return false;
-    return defer.keepsTurnOpen ? defer.keepsTurnOpen(snapshot) : true;
+    return defer.keepsTurnOpen
+      ? defer.keepsTurnOpen(snapshot, { nativeSessionId: this.nativeSessionId || undefined })
+      : true;
   }
 
   private hasQualifyingOpenTools(): boolean {

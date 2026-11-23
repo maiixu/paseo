@@ -71,7 +71,7 @@ export interface AcpOptions {
     /** Quiet limit after qualifying tools finish if no reply settles via `usage_update`. Defaults to 120_000ms. */
     quietLimitMs?: number;
     /** Predicate deciding whether an open tool call keeps the turn open. Defaults to all running tools. */
-    keepsTurnOpen?: (toolCall: AcpToolCallSnapshot) => boolean;
+    keepsTurnOpen?: (toolCall: AcpToolCallSnapshot, context?: AcpDeferTurnToolContext) => boolean;
   };
   /** An unattended mode that approves ACP allow-once requests in the specified native mode. */
   autoAcceptMode?: {
@@ -79,6 +79,10 @@ export interface AcpOptions {
     nativeMode: string;
     default?: boolean;
   };
+}
+
+export interface AcpDeferTurnToolContext {
+  nativeSessionId?: string;
 }
 
 export interface AcpContext {

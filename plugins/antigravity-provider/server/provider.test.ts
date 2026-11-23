@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import type { ProviderEvent } from "@getpaseo/plugin/server/provider";
@@ -880,6 +880,220 @@ it("keeps a turn open for backgrounded run_command calls but not IsDaemon comman
       expect.objectContaining({
         type: "timeline.item",
         item: expect.objectContaining({ type: "assistant_message", text: "Build finished." }),
+      }),
+    );
+  } finally {
+    await connection.close();
+  }
+});
+
+it("completes turns when manage_task cancels a backgrounded run_command without tool_call_update", async () => {
+  const brainRoot = await mkdtemp(path.join(tmpdir(), "paseo-antigravity-brain-"));
+  directories.push(brainRoot);
+  const nativeSessionId = "410c02f3-7c64-45fb-acf0-52147aae36f9";
+  const logsDir = path.join(brainRoot, nativeSessionId, ".system_generated", "logs");
+  await mkdir(logsDir, { recursive: true });
+  const transcriptPath = path.join(logsDir, "transcript_full.jsonl");
+
+  const { directory, launch } = await launchAgent(`
+    const { appendFileSync } = require("node:fs");
+    const { createInterface } = require("node:readline");
+    const transcript = process.env.TRANSCRIPT_PATH;
+    const sessionId = ${JSON.stringify(nativeSessionId)};
+    const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\\n");
+    const writeLog = (entry) => appendFileSync(transcript, JSON.stringify(entry) + "\\n");
+    let turn = 0;
+    createInterface({ input: process.stdin }).on("line", (line) => {
+      const { id, method, params } = JSON.parse(line);
+      switch (method) {
+        case "initialize":
+          send({ id, result: { protocolVersion: 1, agentCapabilities: {} } });
+          break;
+        case "session/new":
+          send({ id, result: { sessionId, configOptions: [
+            { id: "mode", name: "Mode", category: "mode", type: "select", currentValue: "default",
+              options: [{ value: "default", name: "Default" }] },
+          ] } });
+          break;
+        case "session/prompt":
+          turn += 1;
+          if (turn === 1) {
+            // Same-turn kill: run_command backgrounded then canceled before end_turn, no tool_call_update.
+            send({ method: "session/update", params: { sessionId: params.sessionId, update: {
+              sessionUpdate: "tool_call", toolCallId: sessionId + ":1", kind: "execute",
+              title: "sleep 30", status: "in_progress", rawInput: { command_line: "sleep 30" },
+            } } });
+            writeLog({
+              step_index: 1, type: "RUN_COMMAND", status: "RUNNING",
+              content: [
+                "Created At: 2026-11-23T08:47:32-08:00",
+                "Tool is running as a background task with task id: " + sessionId + "/task-1",
+                "Task Description: sleep 30",
+                "Task logs are available at: file:///tmp/task-1.log",
+              ].join("\\n"),
+            });
+            writeLog({
+              step_index: 2, type: "GENERIC", status: "DONE",
+              content: [
+                "Created At: 2026-11-23T08:47:33-08:00",
+                "Completed At: 2026-11-23T08:47:33-08:00",
+                'Task "' + sessionId + '/task-1" cancelled.',
+              ].join("\\n"),
+            });
+            send({ method: "session/update", params: { sessionId: params.sessionId, update: {
+              sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Killed it." },
+            } } });
+            send({ id, result: { stopReason: "end_turn" } });
+          } else {
+            // Deferred-turn kill: stays open across end_turn, then canceled on wakeup with no tool_call_update.
+            send({ method: "session/update", params: { sessionId: params.sessionId, update: {
+              sessionUpdate: "tool_call", toolCallId: sessionId + ":2", kind: "execute",
+              title: "sleep 60", status: "in_progress", rawInput: { command_line: "sleep 60" },
+            } } });
+            writeLog({
+              step_index: 3, type: "RUN_COMMAND", status: "RUNNING",
+              content: [
+                "Created At: 2026-11-23T08:48:00-08:00",
+                "Tool is running as a background task with task id: " + sessionId + "/task-2",
+                "Task Description: sleep 60",
+                "Task logs are available at: file:///tmp/task-2.log",
+              ].join("\\n"),
+            });
+            send({ id, result: { stopReason: "end_turn" } });
+            setTimeout(() => {
+              writeLog({
+                step_index: 4, type: "GENERIC", status: "DONE",
+                content: [
+                  "Created At: 2026-11-23T08:48:01-08:00",
+                  "Completed At: 2026-11-23T08:48:01-08:00",
+                  'Task "' + sessionId + '/task-2" cancelled.',
+                ].join("\\n"),
+              });
+              send({ method: "session/update", params: { sessionId: params.sessionId, update: {
+                sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Canceled after wakeup." },
+              } } });
+              send({ method: "session/update", params: { sessionId: params.sessionId, update: {
+                sessionUpdate: "usage_update", used: 60, size: 1000,
+              } } });
+            }, 80);
+          }
+          break;
+        case "session/close":
+          send({ id, result: {} });
+          break;
+      }
+    });
+  `);
+  const provider = createAntigravityProvider({ brainRoots: [brainRoot] });
+  const connection = await provider.connect({
+    launch: { ...launch, env: { ...launch.env, TRANSCRIPT_PATH: transcriptPath } },
+    versions: [1],
+    capabilities: ["prompt.message"],
+  });
+  const events: ProviderEvent[] = [];
+  connection.onEvent((event) => events.push(event));
+  try {
+    await connection.send({
+      type: "session.open",
+      requestId: "open-1",
+      sessionId: "agy-kill-test",
+      history: "skip",
+      config: {
+        cwd: directory,
+        env: {},
+        mcpServers: {},
+        settings: {},
+        persist: false,
+      },
+    });
+    await expect
+      .poll(() => events.find((event) => event.type === "session.ready"), { timeout: 3_000 })
+      .toBeDefined();
+
+    // Turn 1: same-turn kill completes immediately on end_turn and terminalizes the tool call.
+    await connection.send({
+      type: "session.prompt",
+      sessionId: "agy-kill-test",
+      prompt: {
+        clientMessageId: "same-turn-kill",
+        delivery: "auto",
+        input: { type: "message", content: [{ type: "text", text: "start and kill" }] },
+      },
+    });
+    await expect
+      .poll(
+        () =>
+          events.find(
+            (event) =>
+              event.type === "session.turn" &&
+              event.turnId === "acp:same-turn-kill" &&
+              event.state === "completed",
+          ),
+        { timeout: 3_000 },
+      )
+      .toBeDefined();
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "timeline.item",
+        item: expect.objectContaining({
+          type: "tool_call",
+          id: `${nativeSessionId}:1`,
+          status: "completed",
+        }),
+      }),
+    );
+
+    // Turn 2: deferred-turn kill settles once transcript records cancellation + reply + usage_update.
+    await connection.send({
+      type: "session.prompt",
+      sessionId: "agy-kill-test",
+      prompt: {
+        clientMessageId: "deferred-kill",
+        delivery: "auto",
+        input: { type: "message", content: [{ type: "text", text: "start then cancel later" }] },
+      },
+    });
+    await expect
+      .poll(
+        () =>
+          events.find(
+            (event) =>
+              event.type === "timeline.item" &&
+              event.item.type === "tool_call" &&
+              event.item.id === `${nativeSessionId}:2` &&
+              event.item.status === "running",
+          ),
+        { timeout: 3_000 },
+      )
+      .toBeDefined();
+    expect(
+      events.some(
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp:deferred-kill" &&
+          event.state === "completed",
+      ),
+    ).toBe(false);
+    await expect
+      .poll(
+        () =>
+          events.find(
+            (event) =>
+              event.type === "session.turn" &&
+              event.turnId === "acp:deferred-kill" &&
+              event.state === "completed",
+          ),
+        { timeout: 3_000 },
+      )
+      .toBeDefined();
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "timeline.item",
+        item: expect.objectContaining({
+          type: "tool_call",
+          id: `${nativeSessionId}:2`,
+          status: "completed",
+        }),
       }),
     );
   } finally {
