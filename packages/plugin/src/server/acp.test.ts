@@ -3710,7 +3710,7 @@ describe("deferTurnOnRunningTools", () => {
           observeOpenTools(ctx) {
             terminateToolCall = ctx.terminateToolCall;
             return {
-              sync() {},
+              async sync() {},
               notify() {
                 if (
                   sendEndTurn &&
