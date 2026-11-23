@@ -3488,7 +3488,7 @@ describe("deferTurnOnRunningTools", () => {
     }
   });
 
-  it("preserves quietLimitMs when an observed cancellation closes the last tool after end_turn before a follow-up reply starts", async () => {
+  it("preserves quietLimitMs when an observed cancellation closes the last tool during initial post-end_turn sync before a follow-up reply starts", async () => {
     const { connector, instances } = connectorHarness({
       handleRequest(instance, request) {
         if (request.method !== "session/prompt") return false;
@@ -3507,6 +3507,8 @@ describe("deferTurnOnRunningTools", () => {
       },
     });
 
+    let syncCalls = 0;
+    let releaseDeferredSync: (() => void) | null = null;
     let terminateToolCall:
       | ((toolCallId: string, state: "completed" | "failed" | "canceled") => void)
       | null = null;
@@ -3522,7 +3524,15 @@ describe("deferTurnOnRunningTools", () => {
           observeOpenTools(ctx) {
             terminateToolCall = ctx.terminateToolCall;
             return {
-              async sync() {},
+              async sync() {
+                syncCalls += 1;
+                if (syncCalls === 2) {
+                  await new Promise<void>((resolve) => {
+                    releaseDeferredSync = resolve;
+                  });
+                  ctx.terminateToolCall("late-reply-bg", "canceled");
+                }
+              },
               notify() {},
               dispose() {},
             };
@@ -3557,11 +3567,10 @@ describe("deferTurnOnRunningTools", () => {
           event.item.id === "late-reply-bg",
       );
 
-      // Give end_turn and initial observer sync time to enter deferred waiting.
-      await new Promise((resolve) => setTimeout(resolve, 40));
-
-      // Observer cancels the last open tool AFTER end_turn, before any follow-up chunk arrives.
-      terminateToolCall?.("late-reply-bg", "canceled");
+      // Wait until the initial post-end_turn observer sync is in flight, then expose the cancellation and release it.
+      await expect.poll(() => releaseDeferredSync, { timeout: 2_000 }).not.toBeNull();
+      expect(terminateToolCall).not.toBeNull();
+      releaseDeferredSync?.();
       await waitForEvent(
         events,
         (event) =>
@@ -3604,11 +3613,12 @@ describe("deferTurnOnRunningTools", () => {
           event.turnId === "acp:quiet-cancel-turn" &&
           event.state === "completed",
       );
-      const completedIndex = events.findIndex(
+      const canceledIndex = events.findIndex(
         (event) =>
-          event.type === "session.turn" &&
-          event.turnId === "acp:quiet-cancel-turn" &&
-          event.state === "completed",
+          event.type === "timeline.item" &&
+          event.item.type === "tool_call" &&
+          event.item.id === "late-reply-bg" &&
+          event.item.status === "canceled",
       );
       const replyIndex = events.findIndex(
         (event) =>
@@ -3616,9 +3626,17 @@ describe("deferTurnOnRunningTools", () => {
           event.item.type === "assistant_message" &&
           event.item.text === "Canceled after wakeup.",
       );
-      expect(replyIndex).toBeGreaterThan(-1);
+      const completedIndex = events.findIndex(
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp:quiet-cancel-turn" &&
+          event.state === "completed",
+      );
+      expect(canceledIndex).toBeGreaterThan(-1);
+      expect(replyIndex).toBeGreaterThan(canceledIndex);
       expect(replyIndex).toBeLessThan(completedIndex);
     } finally {
+      releaseDeferredSync?.();
       await connection.close();
     }
   });

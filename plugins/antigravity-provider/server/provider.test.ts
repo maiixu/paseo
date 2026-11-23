@@ -940,10 +940,12 @@ it("completes turns when manage_task cancels a backgrounded run_command without 
                 'Task "' + sessionId + '/task-1" cancelled.',
               ].join("\\n"),
             });
-            send({ method: "session/update", params: { sessionId: params.sessionId, update: {
-              sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Killed it." },
-            } } });
-            send({ id, result: { stopReason: "end_turn" } });
+            setTimeout(() => {
+              send({ method: "session/update", params: { sessionId: params.sessionId, update: {
+                sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Killed it." },
+              } } });
+              send({ id, result: { stopReason: "end_turn" } });
+            }, 80);
           } else {
             // Deferred-turn kill: stays open across end_turn, then canceled on wakeup with no tool_call_update.
             send({ method: "session/update", params: { sessionId: params.sessionId, update: {

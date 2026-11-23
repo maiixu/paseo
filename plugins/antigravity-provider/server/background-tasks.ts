@@ -182,6 +182,21 @@ export function createAntigravityBackgroundTaskObserver(
       .filter((toolCall) => toolCall.status === "in_progress" && isObservedExecuteTool(toolCall));
   }
 
+  function observedPendingExecuteState(): {
+    commands: Set<string>;
+    hasUnknownCommand: boolean;
+  } {
+    const commands = new Set<string>();
+    let hasUnknownCommand = false;
+    for (const toolCall of context.openToolCalls()) {
+      if (toolCall.status !== "pending" || !isObservedExecuteTool(toolCall)) continue;
+      const command = extractCommand(toolCall);
+      if (command) commands.add(command);
+      else hasUnknownCommand = true;
+    }
+    return { commands, hasUnknownCommand };
+  }
+
   function syncOpenToolTimestamps(openTools: readonly AcpToolCallSnapshot[]): void {
     const currentIds = new Set<string>();
     const currentTime = now();
@@ -630,8 +645,10 @@ export function createAntigravityBackgroundTaskObserver(
       else canceledByCommand.set(task.command, [candidate]);
     }
 
+    const pendingState = observedPendingExecuteState();
     const toTerminate: string[] = [];
     for (const [command, calls] of openByCommand) {
+      if (pendingState.hasUnknownCommand || pendingState.commands.has(command)) continue;
       const matched = matchEligibleCancellationsForCommand(
         calls,
         activeByCommand.get(command),

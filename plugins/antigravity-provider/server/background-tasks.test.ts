@@ -666,4 +666,49 @@ describe("createAntigravityBackgroundTaskObserver", () => {
     await harness.observer.sync();
     expect(harness.terminated).toEqual([{ id: "call-perm", state: "canceled" }]);
   });
+
+  it("blocks ambiguous cancellation while a pending same-command call is open on the wire", async () => {
+    const root = await makeBrainRoot();
+    const convId = "ffffffff-2222-3333-4444-555555555555";
+    const file = await transcriptFile(root, convId);
+    await writeFile(file, "");
+
+    let clockMs = Date.parse("2026-11-23T08:54:00-08:00");
+    const harness = createHarness(convId, root, [], 25, () => clockMs);
+    await harness.observer.sync();
+
+    // Call A opens in_progress at t=0.
+    harness.addTool(makeToolCall({ id: "call-a", input: { command_line: "sleep 2" } }));
+
+    // Call B arrives pending at t=1 with the same command.
+    clockMs = Date.parse("2026-11-23T08:54:01-08:00");
+    harness.addTool(
+      makeToolCall({ id: "call-b", status: "pending", input: { command_line: "sleep 2" } }),
+    );
+
+    // Transcript records A finishing normally and B starting at t=2 (inside A's ±3s window) and killed at t=3,
+    // while A's wire completion and B's in_progress update are still pending on the wire.
+    clockMs = Date.parse("2026-11-23T08:54:03-08:00");
+    await appendFile(
+      file,
+      [
+        bgStartEntry(`${convId}/task-a`, "sleep 2", "2026-11-23T08:54:00-08:00"),
+        systemEndedEntry(`${convId}/task-a`, "finished", "2026-11-23T16:54:02Z"),
+        bgStartEntry(`${convId}/task-b`, "sleep 2", "2026-11-23T08:54:02-08:00"),
+        genericCancelEntry(`${convId}/task-b`, "2026-11-23T08:54:03-08:00"),
+      ].join("\n") + "\n",
+    );
+
+    // Pending same-command call B must block canceling A.
+    await harness.observer.sync();
+    expect(harness.terminated).toEqual([]);
+
+    // Once A closes normally on wire and B transitions to in_progress, B is canceled cleanly.
+    harness.closeTool("call-a");
+    harness.addTool(
+      makeToolCall({ id: "call-b", status: "in_progress", input: { command_line: "sleep 2" } }),
+    );
+    await harness.observer.sync();
+    expect(harness.terminated).toEqual([{ id: "call-b", state: "canceled" }]);
+  });
 });

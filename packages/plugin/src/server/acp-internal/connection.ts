@@ -1894,11 +1894,10 @@ class AcpRuntime {
   private async settleDeferredPrompt(active: ActivePrompt): Promise<void> {
     if (active.replyState !== "open") this.fallbackChunkIds.clear();
     const outcome = await new Promise<DeferredTurnOutcome>((resolve) => {
-      const deferred: DeferredTurnState = { timer: null, resolve };
-      active.deferred = deferred;
+      active.deferred = { timer: null, resolve };
       this.deferredToolObserver?.notify();
       if (this.hasQualifyingOpenTools()) {
-        void this.syncInitialDeferredTools(active, deferred);
+        void this.syncDeferredToolObserver();
       }
       this.scheduleDeferredSettle();
     });
@@ -1934,31 +1933,6 @@ class AcpRuntime {
     });
     this.deferredToolObserver = observer;
     await this.syncDeferredToolObserver();
-  }
-
-  private async syncInitialDeferredTools(
-    active: ActivePrompt,
-    deferred: DeferredTurnState,
-  ): Promise<void> {
-    await this.syncDeferredToolObserver();
-    if (
-      this.closing ||
-      this.processFailed ||
-      this.deferredRetirement ||
-      active.cancelling ||
-      active.deferred !== deferred
-    ) {
-      return;
-    }
-    if (
-      active.sawObservedToolTermination &&
-      !this.hasDeferredBlockers() &&
-      !active.hasPostPromptActivity &&
-      !active.crossedEndTurn &&
-      active.replyState === "idle"
-    ) {
-      this.finishDeferredTurn(active, { type: "complete", terminalizeTools: true });
-    }
   }
 
   private async syncDeferredToolObserver(): Promise<void> {
