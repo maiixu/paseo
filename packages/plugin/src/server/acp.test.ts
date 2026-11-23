@@ -3236,6 +3236,114 @@ describe("deferTurnOnRunningTools", () => {
     expect(disposeCount).toBe(1);
   });
 
+  it("retires cleanly with canceled when Stop arrives during a slow post-end_turn observer sync", async () => {
+    const { connector } = connectorHarness({
+      handleRequest(instance, request) {
+        if (request.method !== "session/prompt") return false;
+        instance.notify("session/update", {
+          sessionId: "connector-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "slow-sync-bg",
+            name: "run_command",
+            title: "sleep 30",
+            status: "in_progress",
+          },
+        });
+        instance.respond(request, { stopReason: "end_turn" });
+        return true;
+      },
+    });
+
+    let syncCalls = 0;
+    let releaseSecondSync: (() => void) | null = null;
+    let disposeCount = 0;
+
+    const registration = runAcpProvider({
+      id: "deferred-stop-during-sync",
+      label: "Deferred Stop During Sync",
+      connector,
+      acpOptions: {
+        deferTurnOnRunningTools: {
+          settleDelayMs: 30,
+          quietLimitMs: 5_000,
+          observeOpenTools() {
+            return {
+              async sync() {
+                syncCalls += 1;
+                if (syncCalls === 2) {
+                  await new Promise<void>((resolve) => {
+                    releaseSecondSync = resolve;
+                  });
+                }
+              },
+              notify() {},
+              dispose() {
+                disposeCount += 1;
+              },
+            };
+          },
+        },
+      },
+    });
+    const connection = await registration.connect({
+      versions: [1],
+      capabilities: ["prompt.message"],
+    });
+    const events: ProviderEvent[] = [];
+    connection.onEvent((event) => events.push(event));
+    try {
+      await connection.send(openInput());
+      await waitForEvent(events, (event) => event.type === "session.ready");
+
+      await connection.send({
+        type: "session.prompt",
+        sessionId: "session-1",
+        prompt: {
+          clientMessageId: "stop-sync-turn",
+          delivery: "auto",
+          input: { type: "message", content: [{ type: "text", text: "run job" }] },
+        },
+      });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "tool_call" &&
+          event.item.id === "slow-sync-bg",
+      );
+      await expect.poll(() => releaseSecondSync, { timeout: 2_000 }).not.toBeNull();
+
+      await connection.send({
+        type: "session.interrupt",
+        requestId: "stop-during-sync",
+        sessionId: "session-1",
+      });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp:stop-sync-turn" &&
+          event.state === "canceled",
+      );
+      releaseSecondSync?.();
+      await new Promise((resolve) => setTimeout(resolve, 40));
+
+      const terminalTurns = events.filter(
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp:stop-sync-turn" &&
+          event.state !== "started",
+      );
+      expect(terminalTurns).toHaveLength(1);
+      expect(terminalTurns[0]).toMatchObject({ state: "canceled" });
+      expect(disposeCount).toBe(1);
+    } finally {
+      releaseSecondSync?.();
+      await connection.close();
+    }
+  });
+
   it("settles via quietLimitMs when a background tool finishes with no follow-up reply", async () => {
     const { connector, instances } = connectorHarness({
       handleRequest(instance, request) {

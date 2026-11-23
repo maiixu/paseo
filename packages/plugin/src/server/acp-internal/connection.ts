@@ -832,9 +832,6 @@ class AcpRuntime {
           });
         }
         const state = response.stopReason === "cancelled" ? "canceled" : "completed";
-        if (response.stopReason === "end_turn" && this.hasQualifyingOpenTools()) {
-          await this.syncDeferredToolObserver();
-        }
         if (response.stopReason === "end_turn" && this.shouldDeferTurn(activePrompt)) {
           await this.settleDeferredPrompt(activePrompt);
           return undefined;
@@ -1825,9 +1822,8 @@ class AcpRuntime {
         await this.drainNotifications();
         if (this.isDeferredSteerRetired(active, deferred)) return;
         if (response.stopReason === "end_turn" && this.hasQualifyingOpenTools()) {
-          await this.syncDeferredToolObserver();
+          void this.syncDeferredToolObserver();
         }
-        if (this.isDeferredSteerRetired(active, deferred)) return;
         this.handleSteerResponse(active, response);
       } catch (error) {
         await this.drainNotifications();
@@ -1905,6 +1901,9 @@ class AcpRuntime {
     const outcome = await new Promise<DeferredTurnOutcome>((resolve) => {
       active.deferred = { timer: null, resolve };
       this.deferredToolObserver?.notify();
+      if (this.hasQualifyingOpenTools()) {
+        void this.syncDeferredToolObserver();
+      }
       this.scheduleDeferredSettle();
     });
     if (this.closing || this.deferredRetirement) return;

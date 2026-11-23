@@ -2,13 +2,32 @@ import { appendFile, mkdir, mkdtemp, rename, rm, unlink, writeFile } from "node:
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { AcpDeferredToolObserver, AcpToolCallSnapshot } from "@getpaseo/plugin/server/acp";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const statDelayControl = vi.hoisted(() => ({
+  onStat: null as ((target: string) => Promise<void>) | null,
+}));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    async stat(...args: Parameters<typeof actual.stat>) {
+      if (statDelayControl.onStat) {
+        await statDelayControl.onStat(String(args[0]));
+      }
+      return actual.stat(...args);
+    },
+  };
+});
+
 import { createAntigravityBackgroundTaskObserver } from "./background-tasks.js";
 
 const tempDirs: string[] = [];
 const activeObservers: AcpDeferredToolObserver[] = [];
 
 afterEach(async () => {
+  statDelayControl.onStat = null;
   while (activeObservers.length > 0) {
     activeObservers.pop()?.dispose();
   }
@@ -230,60 +249,136 @@ describe("createAntigravityBackgroundTaskObserver", () => {
     expect(harness.terminated).toEqual([{ id: "call-a", state: "canceled" }]);
   });
 
-  it("cancels only the killed call when parallel identical commands have one wire-completed and one killed", async () => {
+  it("waits for B's wire completion before canceling A when B was opened first and finished in transcript first", async () => {
     const root = await makeBrainRoot();
     const convId = "44444444-2222-3333-4444-555555555555";
     const file = await transcriptFile(root, convId);
     const harness = createHarness(convId, root);
     await harness.observer.sync();
 
-    harness.addTool(makeToolCall({ id: "call-a", input: { command_line: "sleep 30" } }));
+    // Open B FIRST, then A, with identical command text.
     harness.addTool(makeToolCall({ id: "call-b", input: { command_line: "sleep 30" } }));
+    harness.addTool(makeToolCall({ id: "call-a", input: { command_line: "sleep 30" } }));
 
+    // A is killed AND B's transcript finished row is already written BEFORE B closes on wire.
     await writeFile(
       file,
       [
-        bgStartEntry(`${convId}/task-1`, "sleep 30"),
-        bgStartEntry(`${convId}/task-2`, "sleep 30"),
-        genericCancelEntry(`${convId}/task-1`),
+        bgStartEntry(`${convId}/task-b`, "sleep 30"),
+        bgStartEntry(`${convId}/task-a`, "sleep 30"),
+        genericCancelEntry(`${convId}/task-a`),
+        systemEndedEntry(`${convId}/task-b`, "finished"),
       ].join("\n") + "\n",
     );
     await harness.observer.sync();
+    // Ambiguous (2 open calls vs 1 cancellation): must NOT cancel B!
     expect(harness.terminated).toEqual([]);
 
-    // call-b completes via wire while call-a remains open.
+    // Once B's wire completion removes B from open calls, A is unambiguously canceled.
     harness.closeTool("call-b");
-    await appendFile(file, `${systemEndedEntry(`${convId}/task-2`, "finished")}\n`);
     await harness.observer.sync();
     expect(harness.terminated).toEqual([{ id: "call-a", state: "canceled" }]);
 
-    // Trailing SYSTEM_MESSAGE for task-1 must not poison a subsequent new run of sleep 30.
+    // Trailing SYSTEM_MESSAGE for task-a must not poison a subsequent new run of sleep 30.
     harness.addTool(makeToolCall({ id: "call-c", input: { command_line: "sleep 30" } }));
-    await appendFile(file, `${systemEndedEntry(`${convId}/task-1`, "was canceled")}\n`);
+    await appendFile(file, `${systemEndedEntry(`${convId}/task-a`, "was canceled")}\n`);
     await harness.observer.sync();
     expect(harness.terminated).toEqual([{ id: "call-a", state: "canceled" }]);
   });
 
-  it("retires pre-existing historical cancellations during initial open baseline", async () => {
+  it("retires both pre-existing canceled and pre-existing running tasks during initial open baseline", async () => {
     const root = await makeBrainRoot();
     const convId = "66666666-2222-3333-4444-555555555555";
     const file = await transcriptFile(root, convId);
 
-    // Historical canceled task already on disk before session opens / reloads.
+    // Historical transcript has one already-canceled task and one still-running task whose cancel flushes later.
     await writeFile(
       file,
-      [bgStartEntry(`${convId}/task-1`, "sleep 30"), genericCancelEntry(`${convId}/task-1`)].join(
-        "\n",
-      ) + "\n",
+      [
+        bgStartEntry(`${convId}/task-1`, "sleep 30"),
+        genericCancelEntry(`${convId}/task-1`),
+        bgStartEntry(`${convId}/task-old-running`, "sleep 45"),
+      ].join("\n") + "\n",
     );
 
     const harness = createHarness(convId, root);
-    // Initial sync with no open tools baselines and retires task-1.
     await harness.observer.sync();
 
-    // Brand-new run of the same command must NOT claim the historical cancellation.
-    harness.addTool(makeToolCall({ id: "new-call", input: { command_line: "sleep 30" } }));
+    // Brand-new runs must NOT claim either the already-canceled task or a late-flushing historical cancel.
+    harness.addTool(makeToolCall({ id: "new-30", input: { command_line: "sleep 30" } }));
+    harness.addTool(makeToolCall({ id: "new-45", input: { command_line: "sleep 45" } }));
+    await appendFile(file, `${genericCancelEntry(`${convId}/task-old-running`)}\n`);
     await harness.observer.sync();
+    expect(harness.terminated).toEqual([]);
+  });
+
+  it("does not let an in-flight scan discard a kill from the next prompt", async () => {
+    const root = await makeBrainRoot();
+    const convId = "88888888-2222-3333-4444-555555555555";
+    const file = await transcriptFile(root, convId);
+    await writeFile(file, "");
+
+    const harness = createHarness(convId, root);
+    await harness.observer.sync();
+
+    let pauseInFlightStat = false;
+    let enteredPausedStat: (() => void) | null = null;
+    let releasePausedStat: (() => void) | null = null;
+    const pausedStatEntered = new Promise<void>((resolve) => {
+      enteredPausedStat = resolve;
+    });
+
+    statDelayControl.onStat = async (target) => {
+      if (!pauseInFlightStat || !target.endsWith("transcript_full.jsonl")) return;
+      pauseInFlightStat = false;
+      enteredPausedStat?.();
+      await new Promise<void>((resolve) => {
+        releasePausedStat = resolve;
+      });
+    };
+
+    // Turn 1 opens and triggers a scan paused inside stat().
+    pauseInFlightStat = true;
+    harness.addTool(makeToolCall({ id: "turn1-call", input: { command_line: "sleep 10" } }));
+    await pausedStatEntered;
+
+    // While the scan is still in flight, Turn 1 closes and Turn 2 opens + kills sleep 30.
+    harness.closeTool("turn1-call");
+    harness.addTool(makeToolCall({ id: "turn2-call", input: { command_line: "sleep 30" } }));
+    await appendFile(
+      file,
+      [
+        bgStartEntry(`${convId}/task-turn2`, "sleep 30"),
+        genericCancelEntry(`${convId}/task-turn2`),
+      ].join("\n") + "\n",
+    );
+
+    releasePausedStat?.();
+    await harness.observer.sync();
+    expect(harness.terminated).toEqual([{ id: "turn2-call", state: "canceled" }]);
+  });
+
+  it("resolves sync() in a bounded pass even when stat() is slower than reconcileIntervalMs", async () => {
+    const root = await makeBrainRoot();
+    const convId = "99999999-2222-3333-4444-555555555555";
+    const file = await transcriptFile(root, convId);
+    await writeFile(file, `${bgStartEntry(`${convId}/task-slow`, "sleep 30")}\n`);
+
+    const harness = createHarness(convId, root, [], 10);
+    await harness.observer.sync();
+
+    statDelayControl.onStat = async (target) => {
+      if (target.endsWith("transcript_full.jsonl")) {
+        await new Promise((resolve) => setTimeout(resolve, 35));
+      }
+    };
+
+    harness.addTool(makeToolCall({ id: "slow-stat-call", input: { command_line: "sleep 30" } }));
+    const startedAt = Date.now();
+    await harness.observer.sync();
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(elapsedMs).toBeLessThan(500);
     expect(harness.terminated).toEqual([]);
   });
 

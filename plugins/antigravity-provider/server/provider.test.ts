@@ -1253,30 +1253,31 @@ it("handles parallel identical commands where one is killed and one completes no
           ] } });
           break;
         case "session/prompt":
+          // Open B FIRST, then A, with identical command text.
           send({ method: "session/update", params: { sessionId: params.sessionId, update: {
-            sessionUpdate: "tool_call", toolCallId: "parallel-a", kind: "execute",
+            sessionUpdate: "tool_call", toolCallId: "parallel-b", kind: "execute",
             title: "sleep 30", status: "in_progress", rawInput: { command_line: "sleep 30" },
           } } });
           send({ method: "session/update", params: { sessionId: params.sessionId, update: {
-            sessionUpdate: "tool_call", toolCallId: "parallel-b", kind: "execute",
+            sessionUpdate: "tool_call", toolCallId: "parallel-a", kind: "execute",
             title: "sleep 30", status: "in_progress", rawInput: { command_line: "sleep 30" },
           } } });
           writeLog({
             step_index: 1, type: "RUN_COMMAND", status: "RUNNING",
             content: [
               "Created At: 2026-11-23T08:47:32-08:00",
-              "Tool is running as a background task with task id: " + sessionId + "/task-1",
+              "Tool is running as a background task with task id: " + sessionId + "/task-2",
               "Task Description: sleep 30",
-              "Task logs are available at: file:///tmp/task-1.log",
+              "Task logs are available at: file:///tmp/task-2.log",
             ].join("\\n"),
           });
           writeLog({
             step_index: 2, type: "RUN_COMMAND", status: "RUNNING",
             content: [
               "Created At: 2026-11-23T08:47:32-08:00",
-              "Tool is running as a background task with task id: " + sessionId + "/task-2",
+              "Tool is running as a background task with task id: " + sessionId + "/task-1",
               "Task Description: sleep 30",
-              "Task logs are available at: file:///tmp/task-2.log",
+              "Task logs are available at: file:///tmp/task-1.log",
             ].join("\\n"),
           });
           // Kill A before end_turn while B stays running.
@@ -1289,7 +1290,7 @@ it("handles parallel identical commands where one is killed and one completes no
             ].join("\\n"),
           });
           send({ id, result: { stopReason: "end_turn" } });
-          // B finishes normally on wire AND in transcript, then agent emits reply + usage_update.
+          // Write B's finished transcript row FIRST so the observer reads it while BOTH B and A are still open on wire.
           setTimeout(() => {
             writeLog({
               step_index: 4, type: "SYSTEM_MESSAGE", status: "DONE",
@@ -1299,6 +1300,9 @@ it("handles parallel identical commands where one is killed and one completes no
                 "Step ended.",
               ].join("\\n"),
             });
+          }, 60);
+          // Deliver B's wire completion 140ms LATER, after the observer has had multiple sync cycles.
+          setTimeout(() => {
             send({ method: "session/update", params: { sessionId: params.sessionId, update: {
               sessionUpdate: "tool_call_update", toolCallId: "parallel-b", status: "completed",
             } } });
@@ -1308,7 +1312,7 @@ it("handles parallel identical commands where one is killed and one completes no
             send({ method: "session/update", params: { sessionId: params.sessionId, update: {
               sessionUpdate: "usage_update", used: 90, size: 1000,
             } } });
-          }, 80);
+          }, 200);
           break;
         case "session/close":
           send({ id, result: {} });
@@ -1377,6 +1381,15 @@ it("handles parallel identical commands where one is killed and one completes no
         }),
       }),
     );
+    expect(
+      events.some(
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "tool_call" &&
+          event.item.id === "parallel-b" &&
+          event.item.status === "canceled",
+      ),
+    ).toBe(false);
   } finally {
     await connection.close();
   }

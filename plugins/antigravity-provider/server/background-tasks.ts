@@ -126,14 +126,13 @@ export function createAntigravityBackgroundTaskObserver(
     : undefined;
 
   let disposed = false;
-  let hadOpenTools = false;
   let reconciling = false;
   let source: TranscriptSource | null = null;
   let watcher: FSWatcher | null = null;
   let watchedLogsDir: string | null = null;
-  let reconcileTimer: ReturnType<typeof setInterval> | null = null;
-  let activeSync: Promise<void> | null = null;
-  let syncRequested = false;
+  let reconcileTimer: ReturnType<typeof setTimeout> | null = null;
+  let activePass: Promise<void> | null = null;
+  let retryScheduled = false;
 
   const activeTasks = new Map<string, string>();
   const knownTasks = new Map<string, string>();
@@ -153,17 +152,17 @@ export function createAntigravityBackgroundTaskObserver(
     retiredTaskIds.add(taskId);
   }
 
-  function retireUnclaimedCanceledTasks(): void {
-    for (const taskId of unclaimedCanceledTasks.keys()) {
-      retireTaskId(taskId);
-    }
-    unclaimedCanceledTasks.clear();
-  }
-
   function resetParsedSourceState(): void {
     activeTasks.clear();
     knownTasks.clear();
     unclaimedCanceledTasks.clear();
+  }
+
+  function retireAllTrackedTasks(): void {
+    for (const taskId of activeTasks.keys()) retireTaskId(taskId);
+    for (const taskId of knownTasks.keys()) retireTaskId(taskId);
+    for (const taskId of unclaimedCanceledTasks.keys()) retireTaskId(taskId);
+    resetParsedSourceState();
   }
 
   function recordBackgroundTaskStart(rawContent: string): void {
@@ -181,11 +180,11 @@ export function createAntigravityBackgroundTaskObserver(
     unclaimedCanceledTasks.delete(taskId);
   }
 
-  function markTaskEnded(taskId: string, canceled: boolean, baselineMode: boolean): void {
+  function markTaskEnded(taskId: string, canceled: boolean): void {
     const command = activeTasks.get(taskId) ?? knownTasks.get(taskId);
     activeTasks.delete(taskId);
     knownTasks.delete(taskId);
-    if (!canceled || baselineMode) {
+    if (!canceled) {
       unclaimedCanceledTasks.delete(taskId);
       retireTaskId(taskId);
       return;
@@ -195,7 +194,7 @@ export function createAntigravityBackgroundTaskObserver(
     }
   }
 
-  function parseTranscriptLine(line: string, baselineMode: boolean): void {
+  function parseTranscriptLine(line: string): void {
     if (!hasTaskLifecycleMarker(line)) return;
     let parsed: unknown;
     try {
@@ -217,13 +216,13 @@ export function createAntigravityBackgroundTaskObserver(
 
     if (type === "GENERIC" && status === "DONE") {
       const match = GENERIC_TASK_CANCELLED.exec(rawContent.replace(/\r\n/g, "\n"));
-      if (match) markTaskEnded(match[1], true, baselineMode);
+      if (match) markTaskEnded(match[1], true);
       return;
     }
 
     if (type === "SYSTEM_MESSAGE") {
       for (const match of rawContent.matchAll(SYSTEM_TASK_ENDED)) {
-        markTaskEnded(match[1], match[2] === "was canceled", baselineMode);
+        markTaskEnded(match[1], match[2] === "was canceled");
       }
     }
   }
@@ -317,10 +316,7 @@ export function createAntigravityBackgroundTaskObserver(
     return undefined;
   }
 
-  async function readNewTranscriptLines(
-    current: TranscriptSource,
-    baselineMode: boolean,
-  ): Promise<void> {
+  async function readNewTranscriptLines(current: TranscriptSource): Promise<void> {
     let handle: Awaited<ReturnType<typeof open>> | undefined;
     try {
       handle = await open(current.path, "r");
@@ -357,7 +353,7 @@ export function createAntigravityBackgroundTaskObserver(
           }
 
           if (lineBytes.length > 0) {
-            parseTranscriptLine(lineBytes.toString("utf8"), baselineMode);
+            parseTranscriptLine(lineBytes.toString("utf8"));
           }
           current.offset += lineBytes.length + 1;
           sliceStart = newlineIndex + 1;
@@ -383,12 +379,16 @@ export function createAntigravityBackgroundTaskObserver(
     watchedLogsDir = null;
   }
 
-  function stopMonitoring(): void {
-    closeWatcher();
+  function clearReconcileTimer(): void {
     if (reconcileTimer !== null) {
-      clearInterval(reconcileTimer);
+      clearTimeout(reconcileTimer);
       reconcileTimer = null;
     }
+  }
+
+  function stopMonitoring(): void {
+    closeWatcher();
+    clearReconcileTimer();
   }
 
   function attachWatcher(logsDir: string): void {
@@ -401,7 +401,7 @@ export function createAntigravityBackgroundTaskObserver(
         if (name && name !== PRIMARY_TRANSCRIPT_FILENAME && name !== FALLBACK_TRANSCRIPT_FILENAME) {
           return;
         }
-        void scheduleSync();
+        requestBackgroundSync();
       });
       nextWatcher.on("error", () => {
         if (watcher === nextWatcher) closeWatcher();
@@ -413,19 +413,24 @@ export function createAntigravityBackgroundTaskObserver(
     }
   }
 
+  function armReconcileTimer(): void {
+    if (disposed || !conversationId || reconcileTimer !== null) return;
+    if (observedOpenTools().length === 0) return;
+    reconcileTimer = setTimeout(() => {
+      reconcileTimer = null;
+      if (disposed) return;
+      if (observedOpenTools().length === 0) {
+        stopMonitoring();
+        return;
+      }
+      requestBackgroundSync();
+    }, reconcileIntervalMs);
+    reconcileTimer.unref?.();
+  }
+
   function ensureMonitoring(): void {
     if (disposed || !conversationId) return;
-    if (reconcileTimer === null) {
-      reconcileTimer = setInterval(() => {
-        if (disposed) return;
-        if (observedOpenTools().length === 0) {
-          stopMonitoring();
-          return;
-        }
-        void scheduleSync();
-      }, reconcileIntervalMs);
-      reconcileTimer.unref?.();
-    }
+    armReconcileTimer();
     if (source) {
       attachWatcher(source.logsDir);
     }
@@ -435,23 +440,40 @@ export function createAntigravityBackgroundTaskObserver(
     if (disposed || unclaimedCanceledTasks.size === 0) return;
     const openTools = observedOpenTools();
     if (openTools.length === 0) {
-      retireUnclaimedCanceledTasks();
+      retireAllTrackedTasks();
       return;
     }
 
     const activeCommands = new Set(activeTasks.values());
-    const toTerminate: string[] = [];
-
+    const openByCommand = new Map<string, AcpToolCallSnapshot[]>();
     for (const toolCall of openTools) {
       const command = extractCommand(toolCall);
-      if (!command || activeCommands.has(command)) continue;
+      if (!command) continue;
+      const list = openByCommand.get(command);
+      if (list) list.push(toolCall);
+      else openByCommand.set(command, [toolCall]);
+    }
 
-      for (const [taskId, canceledCommand] of unclaimedCanceledTasks) {
-        if (canceledCommand !== command) continue;
+    const canceledByCommand = new Map<string, string[]>();
+    for (const [taskId, command] of unclaimedCanceledTasks) {
+      const list = canceledByCommand.get(command);
+      if (list) list.push(taskId);
+      else canceledByCommand.set(command, [taskId]);
+    }
+
+    const toTerminate: string[] = [];
+    for (const [command, calls] of openByCommand) {
+      if (activeCommands.has(command)) continue;
+      const canceledTaskIds = canceledByCommand.get(command);
+      // Random ACP toolCallIds prevent tying one cancellation to a specific call when multiple
+      // identical calls remain open; wait until wire completions leave only canceled calls open.
+      if (!canceledTaskIds || canceledTaskIds.length < calls.length) continue;
+
+      for (let index = 0; index < calls.length; index += 1) {
+        const taskId = canceledTaskIds[index];
         unclaimedCanceledTasks.delete(taskId);
         retireTaskId(taskId);
-        toTerminate.push(toolCall.id);
-        break;
+        toTerminate.push(calls[index].id);
       }
     }
 
@@ -469,89 +491,103 @@ export function createAntigravityBackgroundTaskObserver(
 
   async function syncOnce(): Promise<void> {
     if (disposed || !conversationId) return;
-    const baselineMode = observedOpenTools().length === 0;
-    if (baselineMode) {
-      retireUnclaimedCanceledTasks();
-    }
 
     const resolved = await resolveTranscriptSource();
     if (disposed) return;
 
     if (resolved && resolved.source.offset < resolved.size) {
-      await readNewTranscriptLines(resolved.source, baselineMode);
+      await readNewTranscriptLines(resolved.source);
       if (disposed) return;
     }
 
-    const openAfter = observedOpenTools();
-    if (openAfter.length === 0) {
-      retireUnclaimedCanceledTasks();
+    if (observedOpenTools().length === 0) {
+      retireAllTrackedTasks();
       stopMonitoring();
       return;
     }
 
-    hadOpenTools = true;
-    ensureMonitoring();
     const logsDir = resolved?.source.logsDir ?? (await findExistingLogsDir());
-    if (!disposed && logsDir && observedOpenTools().length > 0) {
+    if (disposed) return;
+    if (observedOpenTools().length === 0) {
+      retireAllTrackedTasks();
+      stopMonitoring();
+      return;
+    }
+    if (logsDir) {
       attachWatcher(logsDir);
     }
 
     reconcileOpenTools();
-    if (!disposed && observedOpenTools().length === 0) {
-      hadOpenTools = false;
+    if (disposed) return;
+    if (observedOpenTools().length === 0) {
+      retireAllTrackedTasks();
       stopMonitoring();
+      return;
     }
+    armReconcileTimer();
   }
 
-  function scheduleSync(): Promise<void> {
+  function launchPass(): Promise<void> {
     if (disposed || !conversationId) return Promise.resolve();
-    syncRequested = true;
-    if (activeSync) return activeSync;
-
-    activeSync = (async () => {
-      try {
-        while (syncRequested) {
-          if (disposed) break;
-          syncRequested = false;
-          await syncOnce();
-        }
-      } finally {
-        activeSync = null;
-        if (syncRequested && !disposed) {
-          void scheduleSync();
-        }
+    if (activePass) {
+      retryScheduled = true;
+      return activePass;
+    }
+    const pass = syncOnce().finally(() => {
+      if (activePass === pass) activePass = null;
+      if (retryScheduled && !disposed) {
+        retryScheduled = false;
+        void launchPass();
       }
-    })();
+    });
+    activePass = pass;
+    return pass;
+  }
 
-    return activeSync;
+  function requestBackgroundSync(): void {
+    if (disposed || !conversationId) return;
+    if (activePass) {
+      retryScheduled = true;
+      return;
+    }
+    void launchPass();
+  }
+
+  async function syncBounded(): Promise<void> {
+    if (disposed || !conversationId) return;
+    if (activePass) {
+      const inFlight = activePass;
+      retryScheduled = false;
+      await inFlight;
+      if (disposed) return;
+    }
+    if (activePass) {
+      await activePass;
+      return;
+    }
+    await launchPass();
   }
 
   return {
     sync() {
-      return scheduleSync();
+      return syncBounded();
     },
     notify() {
       if (disposed || !conversationId) return;
-      const openTools = observedOpenTools();
-      if (openTools.length === 0) {
+      if (observedOpenTools().length === 0) {
         stopMonitoring();
-        retireUnclaimedCanceledTasks();
-        if (hadOpenTools) {
-          hadOpenTools = false;
-          if (!reconciling) void scheduleSync();
-        }
+        retireAllTrackedTasks();
         return;
       }
-      hadOpenTools = true;
       ensureMonitoring();
       if (!reconciling) {
-        void scheduleSync();
+        requestBackgroundSync();
       }
     },
     dispose() {
       if (disposed) return;
       disposed = true;
-      syncRequested = false;
+      retryScheduled = false;
       stopMonitoring();
       resetParsedSourceState();
       retiredTaskIds.clear();
