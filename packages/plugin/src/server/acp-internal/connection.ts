@@ -1993,7 +1993,7 @@ class AcpRuntime {
     const active = this.activePrompt;
     if (active && wasOpenQualifying) {
       active.sawObservedToolTermination = true;
-      if (state !== "canceled" && !active.deferred && active.lastPromptResponseWireSeq !== null) {
+      if (!active.deferred && active.lastPromptResponseWireSeq !== null) {
         active.crossedEndTurn = true;
       }
       if (active.deferred) {

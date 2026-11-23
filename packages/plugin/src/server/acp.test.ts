@@ -3641,6 +3641,179 @@ describe("deferTurnOnRunningTools", () => {
     }
   });
 
+  it("preserves quietLimitMs when an observed cancellation closes the last tool during post-end_turn notification drain before a follow-up reply starts", async () => {
+    let sendEndTurn: (() => void) | null = null;
+    const base = connectorHarness({
+      handleRequest(instance, request) {
+        if (request.method !== "session/prompt") return false;
+        instance.notify("session/update", {
+          sessionId: "connector-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "drain-cancel-bg",
+            name: "run_command",
+            title: "sleep 60",
+            status: "in_progress",
+          },
+        });
+        sendEndTurn = () => instance.respond(request, { stopReason: "end_turn" });
+        return true;
+      },
+    });
+
+    let terminateToolCall:
+      | ((toolCallId: string, state: "completed" | "failed" | "canceled") => void)
+      | null = null;
+    let triggeredDrainCancel = false;
+
+    const connector = async () => {
+      const inner = await base.connector();
+      const reader = inner.readable.getReader();
+      const readable = new ReadableStream<AcpStreamMessage>({
+        async pull(controller) {
+          const next = await reader.read();
+          if (next.done) {
+            controller.close();
+            return;
+          }
+          controller.enqueue(next.value);
+          const msg = next.value as Record<string, unknown>;
+          const result =
+            typeof msg.result === "object" && msg.result !== null
+              ? (msg.result as Record<string, unknown>)
+              : null;
+          if (!triggeredDrainCancel && result?.stopReason === "end_turn") {
+            triggeredDrainCancel = true;
+            // Run after observeWireMessage stamps lastPromptResponseWireSeq and while drainNotifications() awaits setTimeout(0).
+            void (async () => {
+              await Promise.resolve();
+              await Promise.resolve();
+              terminateToolCall?.("drain-cancel-bg", "canceled");
+            })();
+          }
+        },
+        cancel(reason) {
+          return reader.cancel(reason);
+        },
+      });
+      return { readable, writable: inner.writable };
+    };
+
+    const registration = runAcpProvider({
+      id: "deferred-quiet-drain-cancel",
+      label: "Deferred Quiet Drain Cancel",
+      connector,
+      acpOptions: {
+        deferTurnOnRunningTools: {
+          settleDelayMs: 30,
+          quietLimitMs: 1_500,
+          observeOpenTools(ctx) {
+            terminateToolCall = ctx.terminateToolCall;
+            return {
+              sync() {},
+              notify() {
+                if (
+                  sendEndTurn &&
+                  ctx.openToolCalls().some((tool) => tool.id === "drain-cancel-bg")
+                ) {
+                  const respond = sendEndTurn;
+                  sendEndTurn = null;
+                  respond();
+                }
+              },
+              dispose() {},
+            };
+          },
+        },
+      },
+    });
+    const connection = await registration.connect({
+      versions: [1],
+      capabilities: ["prompt.message"],
+    });
+    const events: ProviderEvent[] = [];
+    connection.onEvent((event) => events.push(event));
+    try {
+      await connection.send(openInput());
+      await waitForEvent(events, (event) => event.type === "session.ready");
+
+      await connection.send({
+        type: "session.prompt",
+        sessionId: "session-1",
+        prompt: {
+          clientMessageId: "drain-cancel-turn",
+          delivery: "auto",
+          input: { type: "message", content: [{ type: "text", text: "run job" }] },
+        },
+      });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "tool_call" &&
+          event.item.id === "drain-cancel-bg" &&
+          event.item.status === "canceled",
+      );
+
+      // Wait well past settleDelayMs (30ms): turn must remain open within quietLimitMs for the follow-up reply.
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      expect(
+        events.some(
+          (event) =>
+            event.type === "session.turn" &&
+            event.turnId === "acp:drain-cancel-turn" &&
+            event.state !== "started",
+        ),
+      ).toBe(false);
+
+      const sessionInstance = base.instances.at(-1);
+      expect(sessionInstance).toBeDefined();
+      sessionInstance?.notify("session/update", {
+        sessionId: "connector-session",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "Canceled during drain." },
+        },
+      });
+      sessionInstance?.notify("session/update", {
+        sessionId: "connector-session",
+        update: { sessionUpdate: "usage_update", used: 56, size: 1_000 },
+      });
+
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp:drain-cancel-turn" &&
+          event.state === "completed",
+      );
+      const canceledIndex = events.findIndex(
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "tool_call" &&
+          event.item.id === "drain-cancel-bg" &&
+          event.item.status === "canceled",
+      );
+      const replyIndex = events.findIndex(
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "assistant_message" &&
+          event.item.text === "Canceled during drain.",
+      );
+      const completedIndex = events.findIndex(
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp:drain-cancel-turn" &&
+          event.state === "completed",
+      );
+      expect(canceledIndex).toBeGreaterThan(-1);
+      expect(replyIndex).toBeGreaterThan(canceledIndex);
+      expect(replyIndex).toBeLessThan(completedIndex);
+    } finally {
+      await connection.close();
+    }
+  });
+
   it("settles via quietLimitMs when a background tool finishes with no follow-up reply", async () => {
     const { connector, instances } = connectorHarness({
       handleRequest(instance, request) {
