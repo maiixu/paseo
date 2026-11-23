@@ -4,8 +4,9 @@ import path from "node:path";
 import type { AcpDeferredToolObserver, AcpToolCallSnapshot } from "@getpaseo/plugin/server/acp";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const statDelayControl = vi.hoisted(() => ({
+const fsHookControl = vi.hoisted(() => ({
   onStat: null as ((target: string) => Promise<void>) | null,
+  onRead: null as ((target: string, callIndex: number) => Promise<void>) | null,
 }));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -13,10 +14,23 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   return {
     ...actual,
     async stat(...args: Parameters<typeof actual.stat>) {
-      if (statDelayControl.onStat) {
-        await statDelayControl.onStat(String(args[0]));
+      if (fsHookControl.onStat) {
+        await fsHookControl.onStat(String(args[0]));
       }
       return actual.stat(...args);
+    },
+    async open(...args: Parameters<typeof actual.open>) {
+      const handle = await actual.open(...args);
+      if (!fsHookControl.onRead) return handle;
+      const target = String(args[0]);
+      let readCalls = 0;
+      const originalRead = handle.read.bind(handle);
+      handle.read = (async (...readArgs: unknown[]) => {
+        readCalls += 1;
+        await fsHookControl.onRead?.(target, readCalls);
+        return (originalRead as (...a: unknown[]) => Promise<unknown>)(...readArgs);
+      }) as typeof handle.read;
+      return handle;
     },
   };
 });
@@ -27,7 +41,8 @@ const tempDirs: string[] = [];
 const activeObservers: AcpDeferredToolObserver[] = [];
 
 afterEach(async () => {
-  statDelayControl.onStat = null;
+  fsHookControl.onStat = null;
+  fsHookControl.onRead = null;
   while (activeObservers.length > 0) {
     activeObservers.pop()?.dispose();
   }
@@ -63,11 +78,14 @@ function makeToolCall(overrides: Partial<AcpToolCallSnapshot> = {}): AcpToolCall
   };
 }
 
+const DEFAULT_BASE_TIME_MS = Date.parse("2026-11-23T08:47:32-08:00");
+
 function createHarness(
   nativeSessionId: string,
   brainRoot: string,
   initialTools: AcpToolCallSnapshot[] = [],
   reconcileIntervalMs = 25,
+  now: () => number = () => DEFAULT_BASE_TIME_MS,
 ) {
   const open = new Map<string, AcpToolCallSnapshot>(initialTools.map((tool) => [tool.id, tool]));
   const terminated: Array<{ id: string; state: "completed" | "failed" | "canceled" }> = [];
@@ -81,7 +99,7 @@ function createHarness(
         observer.notify();
       },
     },
-    { brainRoots: [brainRoot], reconcileIntervalMs },
+    { brainRoots: [brainRoot], reconcileIntervalMs, now },
   );
   activeObservers.push(observer);
   return {
@@ -99,13 +117,13 @@ function createHarness(
   };
 }
 
-function bgStartEntry(taskId: string, command: string) {
+function bgStartEntry(taskId: string, command: string, createdAt = "2026-11-23T08:47:32-08:00") {
   return JSON.stringify({
     step_index: 2,
     type: "RUN_COMMAND",
     status: "RUNNING",
     content: [
-      "Created At: 2026-11-23T08:47:32-08:00",
+      `Created At: ${createdAt}`,
       `Tool is running as a background task with task id: ${taskId}`,
       `Task Description: ${command}`,
       `Task logs are available at: file:///tmp/${taskId}.log`,
@@ -113,27 +131,31 @@ function bgStartEntry(taskId: string, command: string) {
   });
 }
 
-function genericCancelEntry(taskId: string) {
+function genericCancelEntry(taskId: string, canceledAt = "2026-11-23T08:49:02-08:00") {
   return JSON.stringify({
     step_index: 4,
     type: "GENERIC",
     status: "DONE",
     content: [
-      "Created At: 2026-11-23T08:49:02-08:00",
-      "Completed At: 2026-11-23T08:49:02-08:00",
+      `Created At: ${canceledAt}`,
+      `Completed At: ${canceledAt}`,
       `Task "${taskId}" cancelled.`,
     ].join("\n"),
   });
 }
 
-function systemEndedEntry(taskId: string, outcome: "was canceled" | "finished" | "failed") {
+function systemEndedEntry(
+  taskId: string,
+  outcome: "was canceled" | "finished" | "failed",
+  timestamp = "2026-11-23T16:49:02Z",
+) {
   return JSON.stringify({
     step_index: 5,
     type: "SYSTEM_MESSAGE",
     status: "DONE",
     content: [
       "The following is a <SYSTEM_MESSAGE>",
-      `[Message] timestamp=2026-11-23T16:49:02Z sender=${taskId} priority=MESSAGE_PRIORITY_LOW content=Task id "${taskId}" ${outcome} with result:`,
+      `[Message] timestamp=${timestamp} sender=${taskId} priority=MESSAGE_PRIORITY_LOW content=Task id "${taskId}" ${outcome} with result:`,
       "Step ended.",
     ].join("\n"),
   });
@@ -328,7 +350,7 @@ describe("createAntigravityBackgroundTaskObserver", () => {
       enteredPausedStat = resolve;
     });
 
-    statDelayControl.onStat = async (target) => {
+    fsHookControl.onStat = async (target) => {
       if (!pauseInFlightStat || !target.endsWith("transcript_full.jsonl")) return;
       pauseInFlightStat = false;
       enteredPausedStat?.();
@@ -367,7 +389,7 @@ describe("createAntigravityBackgroundTaskObserver", () => {
     const harness = createHarness(convId, root, [], 10);
     await harness.observer.sync();
 
-    statDelayControl.onStat = async (target) => {
+    fsHookControl.onStat = async (target) => {
       if (target.endsWith("transcript_full.jsonl")) {
         await new Promise((resolve) => setTimeout(resolve, 35));
       }
@@ -477,5 +499,102 @@ describe("createAntigravityBackgroundTaskObserver", () => {
     await appendFile(file, `${cancelLine.slice(splitAt)}\n`);
     await harness.observer.sync();
     expect(harness.terminated).toEqual([{ id: "call-big", state: "canceled" }]);
+  });
+
+  it("does not let a late-flushing older cancellation cancel a fresh call opened later", async () => {
+    const root = await makeBrainRoot();
+    const convId = "aaaaaaaa-2222-3333-4444-555555555555";
+    const file = await transcriptFile(root, convId);
+    await writeFile(file, "");
+
+    let clockMs = Date.parse("2026-11-23T08:50:00-08:00");
+    const harness = createHarness(convId, root, [], 25, () => clockMs);
+    await harness.observer.sync();
+
+    // An older run's start + cancellation rows flush AFTER the initial baseline while idle.
+    await appendFile(
+      file,
+      [
+        bgStartEntry(`${convId}/task-old`, "sleep 30", "2026-11-23T08:49:50-08:00"),
+        genericCancelEntry(`${convId}/task-old`, "2026-11-23T08:49:55-08:00"),
+      ].join("\n") + "\n",
+    );
+
+    // A brand-new call with the same command opens later before its own start row is written.
+    clockMs = Date.parse("2026-11-23T08:50:05-08:00");
+    harness.addTool(makeToolCall({ id: "call-fresh", input: { command_line: "sleep 30" } }));
+    await harness.observer.sync();
+    expect(harness.terminated).toEqual([]);
+
+    // Once the fresh call's own task starts and is canceled, the fresh call is canceled.
+    await appendFile(
+      file,
+      [
+        bgStartEntry(`${convId}/task-fresh`, "sleep 30", "2026-11-23T08:50:05-08:00"),
+        genericCancelEntry(`${convId}/task-fresh`, "2026-11-23T08:50:06-08:00"),
+      ].join("\n") + "\n",
+    );
+    await harness.observer.sync();
+    expect(harness.terminated).toEqual([{ id: "call-fresh", state: "canceled" }]);
+  });
+
+  it("does not retire a brand-new task when an in-flight scan reads it just before ACP delivers the wire call", async () => {
+    const root = await makeBrainRoot();
+    const convId = "bbbbbbbb-2222-3333-4444-555555555555";
+    const file = await transcriptFile(root, convId);
+    await writeFile(file, "");
+
+    let clockMs = Date.parse("2026-11-23T08:51:00-08:00");
+    const harness = createHarness(convId, root, [], 25, () => clockMs);
+    await harness.observer.sync();
+
+    // New task's start + kill land in the transcript and an idle scan reads them BEFORE ACP delivers call-new.
+    await appendFile(
+      file,
+      [
+        bgStartEntry(`${convId}/task-early`, "sleep 30", "2026-11-23T08:51:00-08:00"),
+        genericCancelEntry(`${convId}/task-early`, "2026-11-23T08:51:00-08:00"),
+      ].join("\n") + "\n",
+    );
+    await harness.observer.sync();
+    expect(harness.terminated).toEqual([]);
+
+    // 100ms later (even across a second boundary), ACP delivers call-new on the wire.
+    clockMs = Date.parse("2026-11-23T08:51:01.050-08:00");
+    harness.addTool(makeToolCall({ id: "call-early", input: { command_line: "sleep 30" } }));
+    await harness.observer.sync();
+    expect(harness.terminated).toEqual([{ id: "call-early", state: "canceled" }]);
+  });
+
+  it("caps each read pass at the stat snapshot size instead of chasing bytes appended mid-read", async () => {
+    const root = await makeBrainRoot();
+    const convId = "cccccccc-2222-3333-4444-555555555555";
+    const file = await transcriptFile(root, convId);
+    await writeFile(file, "");
+
+    const harness = createHarness(convId, root);
+    await harness.observer.sync();
+
+    harness.addTool(makeToolCall({ id: "call-bounded", input: { command_line: "sleep 30" } }));
+    await writeFile(file, `${bgStartEntry(`${convId}/task-bounded`, "sleep 30")}\n`);
+
+    let appendedMidRead = false;
+    fsHookControl.onRead = async (target, callIndex) => {
+      if (!appendedMidRead && callIndex === 1 && target.endsWith("transcript_full.jsonl")) {
+        appendedMidRead = true;
+        // Append the cancel line AFTER stat() returned the initial size and while read() is running.
+        await appendFile(file, `${genericCancelEntry(`${convId}/task-bounded`)}\n`);
+      }
+    };
+
+    // First sync must stop at the stat snapshot size and NOT chase the mid-read append.
+    await harness.observer.sync();
+    expect(appendedMidRead).toBe(true);
+    expect(harness.terminated).toEqual([]);
+
+    // Next sync picks up the newly appended cancel line cleanly.
+    fsHookControl.onRead = null;
+    await harness.observer.sync();
+    expect(harness.terminated).toEqual([{ id: "call-bounded", state: "canceled" }]);
   });
 });

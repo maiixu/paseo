@@ -405,6 +405,7 @@ interface ActivePrompt {
   lastPromptResponseWireSeq: number | null;
   crossedEndTurn: boolean;
   hasPostPromptActivity: boolean;
+  sawObservedToolTermination: boolean;
   sawObservedCancellation: boolean;
   replyState: DeferredReplyState;
   deferred: DeferredTurnState | null;
@@ -805,6 +806,7 @@ class AcpRuntime {
       lastPromptResponseWireSeq: null,
       crossedEndTurn: false,
       hasPostPromptActivity: false,
+      sawObservedToolTermination: false,
       sawObservedCancellation: false,
       replyState: "idle",
       deferred: null,
@@ -1897,7 +1899,7 @@ class AcpRuntime {
   }
 
   private async settleDeferredPrompt(active: ActivePrompt): Promise<void> {
-    this.fallbackChunkIds.clear();
+    if (active.replyState !== "open") this.fallbackChunkIds.clear();
     const outcome = await new Promise<DeferredTurnOutcome>((resolve) => {
       active.deferred = { timer: null, resolve };
       this.deferredToolObserver?.notify();
@@ -1997,8 +1999,11 @@ class AcpRuntime {
     });
     const active = this.activePrompt;
     if (active && wasOpenQualifying) {
+      active.sawObservedToolTermination = true;
       if (state === "canceled") {
         active.sawObservedCancellation = true;
+      } else if (!active.deferred && active.lastPromptResponseWireSeq !== null) {
+        active.crossedEndTurn = true;
       }
       if (active.deferred) {
         this.maybeSettleAfterObservedCancellation(active);
@@ -2041,7 +2046,11 @@ class AcpRuntime {
   private shouldDeferTurn(active: ActivePrompt): boolean {
     if (!this.options.options.acpOptions?.deferTurnOnRunningTools) return false;
     if (active.cancelling || this.closing || this.processFailed) return false;
-    return this.hasQualifyingOpenTools() || active.crossedEndTurn;
+    return (
+      this.hasQualifyingOpenTools() ||
+      active.crossedEndTurn ||
+      (active.sawObservedToolTermination && active.hasPostPromptActivity)
+    );
   }
 
   private finishDeferredTurn(active: ActivePrompt, outcome: DeferredTurnOutcome): void {

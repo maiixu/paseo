@@ -3344,6 +3344,150 @@ describe("deferTurnOnRunningTools", () => {
     }
   });
 
+  it("keeps a post-end_turn streaming reply in one turn when an observed cancellation closes the last open tool during drainNotifications", async () => {
+    const { connector, instances } = connectorHarness({
+      handleRequest(instance, request) {
+        if (request.method !== "session/prompt") return false;
+        instance.notify("session/update", {
+          sessionId: "connector-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "drain-race-bg",
+            name: "run_command",
+            title: "sleep 30",
+            status: "in_progress",
+          },
+        });
+        instance.respond(request, { stopReason: "end_turn" });
+        // Post-end_turn follow-up reply begins streaming immediately while prompt() drains notifications.
+        instance.notify("session/update", {
+          sessionId: "connector-session",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Part 1 " },
+          },
+        });
+        return true;
+      },
+    });
+
+    let terminateToolCall:
+      | ((toolCallId: string, state: "completed" | "failed" | "canceled") => void)
+      | null = null;
+    let canceledDuringDrain = false;
+
+    const registration = runAcpProvider({
+      id: "deferred-drain-race",
+      label: "Deferred Drain Race",
+      connector,
+      acpOptions: {
+        deferTurnOnRunningTools: {
+          settleDelayMs: 30,
+          quietLimitMs: 1_000,
+          observeOpenTools(ctx) {
+            terminateToolCall = ctx.terminateToolCall;
+            return {
+              async sync() {},
+              notify() {},
+              dispose() {},
+            };
+          },
+        },
+      },
+    });
+    const connection = await registration.connect({
+      versions: [1],
+      capabilities: ["prompt.message"],
+    });
+    const events: ProviderEvent[] = [];
+    connection.onEvent((event) => {
+      events.push(event);
+      if (
+        !canceledDuringDrain &&
+        event.type === "timeline.item" &&
+        event.item.type === "assistant_message" &&
+        event.item.text === "Part 1 "
+      ) {
+        // Fire observed cancellation synchronously while prompt() is still inside drainNotifications().
+        canceledDuringDrain = true;
+        terminateToolCall?.("drain-race-bg", "canceled");
+      }
+    });
+    try {
+      await connection.send(openInput());
+      await waitForEvent(events, (event) => event.type === "session.ready");
+
+      await connection.send({
+        type: "session.prompt",
+        sessionId: "session-1",
+        prompt: {
+          clientMessageId: "drain-race-turn",
+          delivery: "auto",
+          input: { type: "message", content: [{ type: "text", text: "run job" }] },
+        },
+      });
+
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "tool_call" &&
+          event.item.id === "drain-race-bg" &&
+          event.item.status === "canceled",
+      );
+
+      // Turn must still be open waiting for the rest of the streaming post-end_turn reply.
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      expect(
+        events.some(
+          (event) =>
+            event.type === "session.turn" &&
+            event.turnId === "acp:drain-race-turn" &&
+            event.state !== "started",
+        ),
+      ).toBe(false);
+
+      const sessionInstance = instances.at(-1);
+      expect(sessionInstance).toBeDefined();
+      sessionInstance?.notify("session/update", {
+        sessionId: "connector-session",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "Part 2" },
+        },
+      });
+      sessionInstance?.notify("session/update", {
+        sessionId: "connector-session",
+        update: { sessionUpdate: "usage_update", used: 42, size: 1_000 },
+      });
+
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp:drain-race-turn" &&
+          event.state === "completed",
+      );
+
+      const completedIndex = events.findIndex(
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp:drain-race-turn" &&
+          event.state === "completed",
+      );
+      const finalReplyIndex = events.findIndex(
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "assistant_message" &&
+          event.item.text === "Part 1 Part 2",
+      );
+      expect(finalReplyIndex).toBeGreaterThan(-1);
+      expect(finalReplyIndex).toBeLessThan(completedIndex);
+    } finally {
+      await connection.close();
+    }
+  });
+
   it("settles via quietLimitMs when a background tool finishes with no follow-up reply", async () => {
     const { connector, instances } = connectorHarness({
       handleRequest(instance, request) {

@@ -13,13 +13,17 @@ const FALLBACK_TRANSCRIPT_FILENAME = "transcript.jsonl";
 const READ_CHUNK_BYTES = 64 * 1024;
 const DEFAULT_RECONCILE_INTERVAL_MS = 1_000;
 const MAX_RETIRED_TASK_IDS = 4_096;
+// Antigravity transcript timestamps have 1-second resolution; 2s absorbs truncation plus
+// minor wire/event-loop delivery skew while rejecting cancellations from earlier runs.
+const TIMESTAMP_MATCH_TOLERANCE_MS = 2_000;
 const SAFE_CONVERSATION_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const BACKGROUND_TASK_START =
-  /^Created At:[^\n]*\nTool is running as a background task with task id: (\S+)\nTask Description: ([\s\S]*)$/;
+  /^Created At:\s*([^\n]*)\nTool is running as a background task with task id: (\S+)\nTask Description: ([\s\S]*)$/;
 const TASK_LOGS_MARKER = "\nTask logs are available at: ";
 const GENERIC_TASK_CANCELLED =
-  /^Created At:[^\n]*\n(?:Completed At:[^\n]*\n)?Task "([^"]+)" cancelled\.\s*$/;
-const SYSTEM_TASK_ENDED = /content=Task id "([^"]+)" (was canceled|finished|failed) with result:/g;
+  /^Created At:\s*([^\n]*)\n(?:Completed At:\s*([^\n]*)\n)?Task "([^"]+)" cancelled\.\s*$/;
+const SYSTEM_TASK_ENDED =
+  /(?:timestamp=(\S+)[^\n]*?)?content=Task id "([^"]+)" (was canceled|finished|failed) with result:/g;
 
 interface TranscriptSource {
   logsDir: string;
@@ -35,9 +39,19 @@ interface ResolvedTranscriptSource {
   size: number;
 }
 
+interface TrackedTask {
+  command: string;
+  startedAtMs?: number;
+}
+
+interface CanceledTask extends TrackedTask {
+  canceledAtMs?: number;
+}
+
 export interface AntigravityBackgroundTaskObserverOptions {
   brainRoots?: readonly string[];
   reconcileIntervalMs?: number;
+  now?: () => number;
 }
 
 function defaultBrainRoots(): readonly string[] {
@@ -51,6 +65,19 @@ function defaultBrainRoots(): readonly string[] {
 
 function normalizeCommand(value: string): string {
   return value.replace(/\r\n/g, "\n").trim();
+}
+
+function parseIsoTimestampMs(raw: string | undefined): number | undefined {
+  if (!raw) return undefined;
+  const parsed = Date.parse(raw.trim());
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function canceledTaskTimestampMs(task: CanceledTask): number | undefined {
+  if (task.startedAtMs !== undefined && task.canceledAtMs !== undefined) {
+    return Math.min(task.startedAtMs, task.canceledAtMs);
+  }
+  return task.startedAtMs ?? task.canceledAtMs;
 }
 
 function isObservedExecuteTool(toolCall: AcpToolCallSnapshot): boolean {
@@ -121,12 +148,14 @@ export function createAntigravityBackgroundTaskObserver(
     10,
     options?.reconcileIntervalMs ?? DEFAULT_RECONCILE_INTERVAL_MS,
   );
+  const now = options?.now ?? Date.now;
   const conversationId = SAFE_CONVERSATION_ID.test(context.nativeSessionId)
     ? context.nativeSessionId
     : undefined;
 
   let disposed = false;
   let reconciling = false;
+  let hasCompletedInitialBaseline = false;
   let source: TranscriptSource | null = null;
   let watcher: FSWatcher | null = null;
   let watchedLogsDir: string | null = null;
@@ -134,13 +163,30 @@ export function createAntigravityBackgroundTaskObserver(
   let activePass: Promise<void> | null = null;
   let retryScheduled = false;
 
-  const activeTasks = new Map<string, string>();
-  const knownTasks = new Map<string, string>();
-  const unclaimedCanceledTasks = new Map<string, string>();
+  const activeTasks = new Map<string, TrackedTask>();
+  const knownTasks = new Map<string, TrackedTask>();
+  const unclaimedCanceledTasks = new Map<string, CanceledTask>();
+  const openToolFirstSeenAt = new Map<string, number>();
   const retiredTaskIds = new Set<string>();
 
   function observedOpenTools(): AcpToolCallSnapshot[] {
     return context.openToolCalls().filter(isObservedExecuteTool);
+  }
+
+  function syncOpenToolTimestamps(openTools: readonly AcpToolCallSnapshot[]): void {
+    const currentIds = new Set<string>();
+    const currentTime = now();
+    for (const tool of openTools) {
+      currentIds.add(tool.id);
+      if (!openToolFirstSeenAt.has(tool.id)) {
+        openToolFirstSeenAt.set(tool.id, currentTime);
+      }
+    }
+    for (const id of openToolFirstSeenAt.keys()) {
+      if (!currentIds.has(id)) {
+        openToolFirstSeenAt.delete(id);
+      }
+    }
   }
 
   function retireTaskId(taskId: string): void {
@@ -165,23 +211,51 @@ export function createAntigravityBackgroundTaskObserver(
     resetParsedSourceState();
   }
 
-  function recordBackgroundTaskStart(rawContent: string): void {
+  // Only called when no execute tool calls are currently open. Any task whose timestamp is
+  // strictly older than (now - tolerance) cannot match a future call that has not opened yet.
+  function pruneStaleTrackedTasks(): void {
+    const cutoff = now() - TIMESTAMP_MATCH_TOLERANCE_MS;
+    for (const [taskId, task] of activeTasks) {
+      if (task.startedAtMs === undefined || task.startedAtMs < cutoff) {
+        activeTasks.delete(taskId);
+        knownTasks.delete(taskId);
+        retireTaskId(taskId);
+      }
+    }
+    for (const [taskId, task] of knownTasks) {
+      if (task.startedAtMs === undefined || task.startedAtMs < cutoff) {
+        knownTasks.delete(taskId);
+        retireTaskId(taskId);
+      }
+    }
+    for (const [taskId, task] of unclaimedCanceledTasks) {
+      const taskTime = canceledTaskTimestampMs(task);
+      if (taskTime === undefined || taskTime < cutoff) {
+        unclaimedCanceledTasks.delete(taskId);
+        retireTaskId(taskId);
+      }
+    }
+  }
+
+  function recordBackgroundTaskStart(rawContent: string, recordCreatedAt?: string): void {
     const content = rawContent.replace(/\r\n/g, "\n");
     const match = BACKGROUND_TASK_START.exec(content);
     if (!match) return;
-    const [, taskId, rawDescription] = match;
+    const [, createdAtRaw, taskId, rawDescription] = match;
     if (retiredTaskIds.has(taskId)) return;
     const logsIndex = rawDescription.lastIndexOf(TASK_LOGS_MARKER);
     const description = logsIndex === -1 ? rawDescription : rawDescription.slice(0, logsIndex);
     const command = normalizeCommand(description);
     if (!command) return;
-    activeTasks.set(taskId, command);
-    knownTasks.set(taskId, command);
+    const startedAtMs = parseIsoTimestampMs(createdAtRaw) ?? parseIsoTimestampMs(recordCreatedAt);
+    const tracked: TrackedTask = { command, startedAtMs };
+    activeTasks.set(taskId, tracked);
+    knownTasks.set(taskId, tracked);
     unclaimedCanceledTasks.delete(taskId);
   }
 
-  function markTaskEnded(taskId: string, canceled: boolean): void {
-    const command = activeTasks.get(taskId) ?? knownTasks.get(taskId);
+  function markTaskEnded(taskId: string, canceled: boolean, endedAtMs?: number): void {
+    const tracked = activeTasks.get(taskId) ?? knownTasks.get(taskId);
     activeTasks.delete(taskId);
     knownTasks.delete(taskId);
     if (!canceled) {
@@ -189,8 +263,31 @@ export function createAntigravityBackgroundTaskObserver(
       retireTaskId(taskId);
       return;
     }
-    if (command && !retiredTaskIds.has(taskId)) {
-      unclaimedCanceledTasks.set(taskId, command);
+    if (tracked && !retiredTaskIds.has(taskId)) {
+      unclaimedCanceledTasks.set(taskId, {
+        command: tracked.command,
+        startedAtMs: tracked.startedAtMs,
+        canceledAtMs: endedAtMs,
+      });
+    }
+  }
+
+  function recordGenericTaskCancellation(rawContent: string, recordCreatedAt?: string): void {
+    const match = GENERIC_TASK_CANCELLED.exec(rawContent.replace(/\r\n/g, "\n"));
+    if (!match) return;
+    const [, createdAtRaw, completedAtRaw, taskId] = match;
+    const canceledAtMs =
+      parseIsoTimestampMs(completedAtRaw) ??
+      parseIsoTimestampMs(createdAtRaw) ??
+      parseIsoTimestampMs(recordCreatedAt);
+    markTaskEnded(taskId, true, canceledAtMs);
+  }
+
+  function recordSystemTaskEnded(rawContent: string, recordCreatedAt?: string): void {
+    const fallbackEndedAt = parseIsoTimestampMs(recordCreatedAt);
+    for (const match of rawContent.matchAll(SYSTEM_TASK_ENDED)) {
+      const endedAtMs = parseIsoTimestampMs(match[1]) ?? fallbackEndedAt;
+      markTaskEnded(match[2], match[3] === "was canceled", endedAtMs);
     }
   }
 
@@ -207,23 +304,15 @@ export function createAntigravityBackgroundTaskObserver(
     const type = typeof record.type === "string" ? record.type : undefined;
     const status = typeof record.status === "string" ? record.status : undefined;
     const rawContent = typeof record.content === "string" ? record.content : undefined;
+    const recordCreatedAt = typeof record.created_at === "string" ? record.created_at : undefined;
     if (!type || !rawContent) return;
 
     if (type === "RUN_COMMAND" && status === "RUNNING") {
-      recordBackgroundTaskStart(rawContent);
-      return;
-    }
-
-    if (type === "GENERIC" && status === "DONE") {
-      const match = GENERIC_TASK_CANCELLED.exec(rawContent.replace(/\r\n/g, "\n"));
-      if (match) markTaskEnded(match[1], true);
-      return;
-    }
-
-    if (type === "SYSTEM_MESSAGE") {
-      for (const match of rawContent.matchAll(SYSTEM_TASK_ENDED)) {
-        markTaskEnded(match[1], match[2] === "was canceled");
-      }
+      recordBackgroundTaskStart(rawContent, recordCreatedAt);
+    } else if (type === "GENERIC" && status === "DONE") {
+      recordGenericTaskCancellation(rawContent, recordCreatedAt);
+    } else if (type === "SYSTEM_MESSAGE") {
+      recordSystemTaskEnded(rawContent, recordCreatedAt);
     }
   }
 
@@ -316,7 +405,10 @@ export function createAntigravityBackgroundTaskObserver(
     return undefined;
   }
 
-  async function readNewTranscriptLines(current: TranscriptSource): Promise<void> {
+  async function readNewTranscriptLines(
+    current: TranscriptSource,
+    maxOffset: number,
+  ): Promise<void> {
     let handle: Awaited<ReturnType<typeof open>> | undefined;
     try {
       handle = await open(current.path, "r");
@@ -325,9 +417,10 @@ export function createAntigravityBackgroundTaskObserver(
       let pendingParts: Buffer[] = [];
       let pendingLength = 0;
 
-      for (;;) {
+      while (readPos < maxOffset) {
         if (disposed) break;
-        const { bytesRead } = await handle.read(chunk, 0, READ_CHUNK_BYTES, readPos);
+        const toRead = Math.min(READ_CHUNK_BYTES, maxOffset - readPos);
+        const { bytesRead } = await handle.read(chunk, 0, toRead, readPos);
         if (bytesRead === 0 || disposed) break;
         readPos += bytesRead;
 
@@ -436,15 +529,57 @@ export function createAntigravityBackgroundTaskObserver(
     }
   }
 
+  function matchEligibleCancellationsForCommand(
+    calls: readonly AcpToolCallSnapshot[],
+    activeForCommand: readonly TrackedTask[] | undefined,
+    canceledForCommand: ReadonlyArray<{ taskId: string; timestampMs: number }> | undefined,
+    currentTime: number,
+  ): Array<{ toolCallId: string; taskId: string }> {
+    const callEntries = calls
+      .map((call) => ({
+        id: call.id,
+        openedAt: openToolFirstSeenAt.get(call.id) ?? currentTime,
+      }))
+      .sort((a, b) => b.openedAt - a.openedAt);
+    const earliestCallOpenedAt = callEntries[callEntries.length - 1]?.openedAt ?? currentTime;
+
+    const hasEligibleActiveTask =
+      activeForCommand?.some(
+        (task) =>
+          task.startedAtMs === undefined ||
+          task.startedAtMs + TIMESTAMP_MATCH_TOLERANCE_MS >= earliestCallOpenedAt,
+      ) ?? false;
+    if (hasEligibleActiveTask) return [];
+
+    // Random ACP toolCallIds prevent tying one cancellation to a specific call when multiple
+    // identical calls remain open; wait until wire completions leave only canceled calls open
+    // and every open call has a causally eligible canceled task.
+    if (!canceledForCommand || canceledForCommand.length < callEntries.length) return [];
+
+    const canceledNewestFirst = [...canceledForCommand].sort(
+      (a, b) => b.timestampMs - a.timestampMs,
+    );
+    const matched: Array<{ toolCallId: string; taskId: string }> = [];
+    for (let index = 0; index < callEntries.length; index += 1) {
+      const canceled = canceledNewestFirst[index];
+      if (canceled.timestampMs + TIMESTAMP_MATCH_TOLERANCE_MS < callEntries[index].openedAt) {
+        return [];
+      }
+      matched.push({ toolCallId: callEntries[index].id, taskId: canceled.taskId });
+    }
+    return matched;
+  }
+
   function reconcileOpenTools(): void {
     if (disposed || unclaimedCanceledTasks.size === 0) return;
     const openTools = observedOpenTools();
+    syncOpenToolTimestamps(openTools);
     if (openTools.length === 0) {
-      retireAllTrackedTasks();
+      pruneStaleTrackedTasks();
       return;
     }
 
-    const activeCommands = new Set(activeTasks.values());
+    const currentTime = now();
     const openByCommand = new Map<string, AcpToolCallSnapshot[]>();
     for (const toolCall of openTools) {
       const command = extractCommand(toolCall);
@@ -454,26 +589,34 @@ export function createAntigravityBackgroundTaskObserver(
       else openByCommand.set(command, [toolCall]);
     }
 
-    const canceledByCommand = new Map<string, string[]>();
-    for (const [taskId, command] of unclaimedCanceledTasks) {
-      const list = canceledByCommand.get(command);
-      if (list) list.push(taskId);
-      else canceledByCommand.set(command, [taskId]);
+    const activeByCommand = new Map<string, TrackedTask[]>();
+    for (const task of activeTasks.values()) {
+      const list = activeByCommand.get(task.command);
+      if (list) list.push(task);
+      else activeByCommand.set(task.command, [task]);
+    }
+
+    const canceledByCommand = new Map<string, Array<{ taskId: string; timestampMs: number }>>();
+    for (const [taskId, task] of unclaimedCanceledTasks) {
+      const timestampMs = canceledTaskTimestampMs(task);
+      if (timestampMs === undefined) continue;
+      const list = canceledByCommand.get(task.command);
+      if (list) list.push({ taskId, timestampMs });
+      else canceledByCommand.set(task.command, [{ taskId, timestampMs }]);
     }
 
     const toTerminate: string[] = [];
     for (const [command, calls] of openByCommand) {
-      if (activeCommands.has(command)) continue;
-      const canceledTaskIds = canceledByCommand.get(command);
-      // Random ACP toolCallIds prevent tying one cancellation to a specific call when multiple
-      // identical calls remain open; wait until wire completions leave only canceled calls open.
-      if (!canceledTaskIds || canceledTaskIds.length < calls.length) continue;
-
-      for (let index = 0; index < calls.length; index += 1) {
-        const taskId = canceledTaskIds[index];
+      const matched = matchEligibleCancellationsForCommand(
+        calls,
+        activeByCommand.get(command),
+        canceledByCommand.get(command),
+        currentTime,
+      );
+      for (const { toolCallId, taskId } of matched) {
         unclaimedCanceledTasks.delete(taskId);
         retireTaskId(taskId);
-        toTerminate.push(calls[index].id);
+        toTerminate.push(toolCallId);
       }
     }
 
@@ -496,20 +639,31 @@ export function createAntigravityBackgroundTaskObserver(
     if (disposed) return;
 
     if (resolved && resolved.source.offset < resolved.size) {
-      await readNewTranscriptLines(resolved.source);
+      await readNewTranscriptLines(resolved.source, resolved.size);
       if (disposed) return;
     }
 
-    if (observedOpenTools().length === 0) {
-      retireAllTrackedTasks();
+    const openTools = observedOpenTools();
+    syncOpenToolTimestamps(openTools);
+    if (openTools.length === 0) {
+      if (!hasCompletedInitialBaseline) {
+        hasCompletedInitialBaseline = true;
+        retireAllTrackedTasks();
+      } else {
+        pruneStaleTrackedTasks();
+      }
       stopMonitoring();
       return;
     }
 
+    hasCompletedInitialBaseline = true;
+
     const logsDir = resolved?.source.logsDir ?? (await findExistingLogsDir());
     if (disposed) return;
-    if (observedOpenTools().length === 0) {
-      retireAllTrackedTasks();
+    const currentOpenTools = observedOpenTools();
+    syncOpenToolTimestamps(currentOpenTools);
+    if (currentOpenTools.length === 0) {
+      pruneStaleTrackedTasks();
       stopMonitoring();
       return;
     }
@@ -519,8 +673,10 @@ export function createAntigravityBackgroundTaskObserver(
 
     reconcileOpenTools();
     if (disposed) return;
-    if (observedOpenTools().length === 0) {
-      retireAllTrackedTasks();
+    const remainingOpenTools = observedOpenTools();
+    syncOpenToolTimestamps(remainingOpenTools);
+    if (remainingOpenTools.length === 0) {
+      pruneStaleTrackedTasks();
       stopMonitoring();
       return;
     }
@@ -574,11 +730,16 @@ export function createAntigravityBackgroundTaskObserver(
     },
     notify() {
       if (disposed || !conversationId) return;
-      if (observedOpenTools().length === 0) {
+      const openTools = observedOpenTools();
+      syncOpenToolTimestamps(openTools);
+      if (openTools.length === 0) {
         stopMonitoring();
-        retireAllTrackedTasks();
+        if (hasCompletedInitialBaseline) {
+          pruneStaleTrackedTasks();
+        }
         return;
       }
+      hasCompletedInitialBaseline = true;
       ensureMonitoring();
       if (!reconciling) {
         requestBackgroundSync();
@@ -590,6 +751,7 @@ export function createAntigravityBackgroundTaskObserver(
       retryScheduled = false;
       stopMonitoring();
       resetParsedSourceState();
+      openToolFirstSeenAt.clear();
       retiredTaskIds.clear();
       source = null;
     },

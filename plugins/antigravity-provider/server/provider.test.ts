@@ -926,7 +926,7 @@ it("completes turns when manage_task cancels a backgrounded run_command without 
             writeLog({
               step_index: 1, type: "RUN_COMMAND", status: "RUNNING",
               content: [
-                "Created At: 2026-11-23T08:47:32-08:00",
+                "Created At: " + new Date().toISOString(),
                 "Tool is running as a background task with task id: " + sessionId + "/task-1",
                 "Task Description: sleep 30",
                 "Task logs are available at: file:///tmp/task-1.log",
@@ -935,8 +935,8 @@ it("completes turns when manage_task cancels a backgrounded run_command without 
             writeLog({
               step_index: 2, type: "GENERIC", status: "DONE",
               content: [
-                "Created At: 2026-11-23T08:47:33-08:00",
-                "Completed At: 2026-11-23T08:47:33-08:00",
+                "Created At: " + new Date().toISOString(),
+                "Completed At: " + new Date().toISOString(),
                 'Task "' + sessionId + '/task-1" cancelled.',
               ].join("\\n"),
             });
@@ -953,7 +953,7 @@ it("completes turns when manage_task cancels a backgrounded run_command without 
             writeLog({
               step_index: 3, type: "RUN_COMMAND", status: "RUNNING",
               content: [
-                "Created At: 2026-11-23T08:48:00-08:00",
+                "Created At: " + new Date().toISOString(),
                 "Tool is running as a background task with task id: " + sessionId + "/task-2",
                 "Task Description: sleep 60",
                 "Task logs are available at: file:///tmp/task-2.log",
@@ -964,8 +964,8 @@ it("completes turns when manage_task cancels a backgrounded run_command without 
               writeLog({
                 step_index: 4, type: "GENERIC", status: "DONE",
                 content: [
-                  "Created At: 2026-11-23T08:48:01-08:00",
-                  "Completed At: 2026-11-23T08:48:01-08:00",
+                  "Created At: " + new Date().toISOString(),
+                  "Completed At: " + new Date().toISOString(),
                   'Task "' + sessionId + '/task-2" cancelled.',
                 ].join("\\n"),
               });
@@ -1136,7 +1136,7 @@ it("settles a deferred turn when cancellation flushes to transcript after the fi
           writeLog({
             step_index: 1, type: "RUN_COMMAND", status: "RUNNING",
             content: [
-              "Created At: 2026-11-23T08:47:32-08:00",
+              "Created At: " + new Date().toISOString(),
               "Tool is running as a background task with task id: " + sessionId + "/task-1",
               "Task Description: sleep 30",
               "Task logs are available at: file:///tmp/task-1.log",
@@ -1156,8 +1156,8 @@ it("settles a deferred turn when cancellation flushes to transcript after the fi
             writeLog({
               step_index: 2, type: "GENERIC", status: "DONE",
               content: [
-                "Created At: 2026-11-23T08:47:33-08:00",
-                "Completed At: 2026-11-23T08:47:33-08:00",
+                "Created At: " + new Date().toISOString(),
+                "Completed At: " + new Date().toISOString(),
                 'Task "' + sessionId + '/task-1" cancelled.',
               ].join("\\n"),
             });
@@ -1265,7 +1265,7 @@ it("handles parallel identical commands where one is killed and one completes no
           writeLog({
             step_index: 1, type: "RUN_COMMAND", status: "RUNNING",
             content: [
-              "Created At: 2026-11-23T08:47:32-08:00",
+              "Created At: " + new Date().toISOString(),
               "Tool is running as a background task with task id: " + sessionId + "/task-2",
               "Task Description: sleep 30",
               "Task logs are available at: file:///tmp/task-2.log",
@@ -1274,7 +1274,7 @@ it("handles parallel identical commands where one is killed and one completes no
           writeLog({
             step_index: 2, type: "RUN_COMMAND", status: "RUNNING",
             content: [
-              "Created At: 2026-11-23T08:47:32-08:00",
+              "Created At: " + new Date().toISOString(),
               "Tool is running as a background task with task id: " + sessionId + "/task-1",
               "Task Description: sleep 30",
               "Task logs are available at: file:///tmp/task-1.log",
@@ -1284,8 +1284,8 @@ it("handles parallel identical commands where one is killed and one completes no
           writeLog({
             step_index: 3, type: "GENERIC", status: "DONE",
             content: [
-              "Created At: 2026-11-23T08:47:33-08:00",
-              "Completed At: 2026-11-23T08:47:33-08:00",
+              "Created At: " + new Date().toISOString(),
+              "Completed At: " + new Date().toISOString(),
               'Task "' + sessionId + '/task-1" cancelled.',
             ].join("\\n"),
           });
@@ -1296,7 +1296,7 @@ it("handles parallel identical commands where one is killed and one completes no
               step_index: 4, type: "SYSTEM_MESSAGE", status: "DONE",
               content: [
                 "The following is a <SYSTEM_MESSAGE>",
-                '[Message] timestamp=2026-11-23T16:49:02Z sender=' + sessionId + '/task-2 priority=MESSAGE_PRIORITY_LOW content=Task id "' + sessionId + '/task-2" finished with result:',
+                '[Message] timestamp=' + new Date().toISOString() + ' sender=' + sessionId + '/task-2 priority=MESSAGE_PRIORITY_LOW content=Task id "' + sessionId + '/task-2" finished with result:',
                 "Step ended.",
               ].join("\\n"),
             });
