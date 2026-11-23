@@ -406,7 +406,6 @@ interface ActivePrompt {
   crossedEndTurn: boolean;
   hasPostPromptActivity: boolean;
   sawObservedToolTermination: boolean;
-  sawObservedCancellation: boolean;
   replyState: DeferredReplyState;
   deferred: DeferredTurnState | null;
 }
@@ -807,7 +806,6 @@ class AcpRuntime {
       crossedEndTurn: false,
       hasPostPromptActivity: false,
       sawObservedToolTermination: false,
-      sawObservedCancellation: false,
       replyState: "idle",
       deferred: null,
     };
@@ -1644,9 +1642,6 @@ class AcpRuntime {
     }
     const isOpenQualifying =
       this.liveOpenToolIds.has(snapshot.id) && this.toolKeepsTurnOpen(snapshot);
-    if (active && (isOpenQualifying || (wasOpenQualifying && !isOpen))) {
-      active.sawObservedCancellation = false;
-    }
     this.noteDeferredToolTransition(wasOpenQualifying, isOpenQualifying, isOpen, snapshot, wireSeq);
     if (this.replayWindow === null) this.deferredToolObserver?.notify();
   }
@@ -1816,7 +1811,6 @@ class AcpRuntime {
         this.fallbackChunkIds.clear();
         active.lastPromptResponseWireSeq = null;
         active.hasPostPromptActivity = false;
-        active.sawObservedCancellation = false;
         if (active.replyState === "settled_with_open_tools") active.replyState = "idle";
         const response = await this.call(
           this.connection.prompt({ sessionId: this.nativeSessionId, prompt }),
@@ -1836,7 +1830,6 @@ class AcpRuntime {
           active.lastPromptResponseWireSeq = this.incomingWireSeq;
         }
         active.wirePromptsInFlight -= 1;
-        this.maybeSettleAfterObservedCancellation(active);
         this.scheduleDeferredSettle();
       }
     };
@@ -1901,10 +1894,11 @@ class AcpRuntime {
   private async settleDeferredPrompt(active: ActivePrompt): Promise<void> {
     if (active.replyState !== "open") this.fallbackChunkIds.clear();
     const outcome = await new Promise<DeferredTurnOutcome>((resolve) => {
-      active.deferred = { timer: null, resolve };
+      const deferred: DeferredTurnState = { timer: null, resolve };
+      active.deferred = deferred;
       this.deferredToolObserver?.notify();
       if (this.hasQualifyingOpenTools()) {
-        void this.syncDeferredToolObserver();
+        void this.syncInitialDeferredTools(active, deferred);
       }
       this.scheduleDeferredSettle();
     });
@@ -1940,6 +1934,31 @@ class AcpRuntime {
     });
     this.deferredToolObserver = observer;
     await this.syncDeferredToolObserver();
+  }
+
+  private async syncInitialDeferredTools(
+    active: ActivePrompt,
+    deferred: DeferredTurnState,
+  ): Promise<void> {
+    await this.syncDeferredToolObserver();
+    if (
+      this.closing ||
+      this.processFailed ||
+      this.deferredRetirement ||
+      active.cancelling ||
+      active.deferred !== deferred
+    ) {
+      return;
+    }
+    if (
+      active.sawObservedToolTermination &&
+      !this.hasDeferredBlockers() &&
+      !active.hasPostPromptActivity &&
+      !active.crossedEndTurn &&
+      active.replyState === "idle"
+    ) {
+      this.finishDeferredTurn(active, { type: "complete", terminalizeTools: true });
+    }
   }
 
   private async syncDeferredToolObserver(): Promise<void> {
@@ -2000,30 +2019,14 @@ class AcpRuntime {
     const active = this.activePrompt;
     if (active && wasOpenQualifying) {
       active.sawObservedToolTermination = true;
-      if (state === "canceled") {
-        active.sawObservedCancellation = true;
-      } else if (!active.deferred && active.lastPromptResponseWireSeq !== null) {
+      if (state !== "canceled" && !active.deferred && active.lastPromptResponseWireSeq !== null) {
         active.crossedEndTurn = true;
       }
       if (active.deferred) {
-        this.maybeSettleAfterObservedCancellation(active);
         this.scheduleDeferredSettle();
       }
     }
     this.deferredToolObserver?.notify();
-  }
-
-  private maybeSettleAfterObservedCancellation(active: ActivePrompt): void {
-    if (
-      active.deferred &&
-      active.replyState === "idle" &&
-      active.sawObservedCancellation &&
-      !active.hasPostPromptActivity &&
-      !active.crossedEndTurn &&
-      !this.hasDeferredBlockers()
-    ) {
-      active.replyState = "settled";
-    }
   }
 
   private hasQualifyingOpenTools(): boolean {

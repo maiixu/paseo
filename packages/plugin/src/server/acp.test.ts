@@ -3488,6 +3488,141 @@ describe("deferTurnOnRunningTools", () => {
     }
   });
 
+  it("preserves quietLimitMs when an observed cancellation closes the last tool after end_turn before a follow-up reply starts", async () => {
+    const { connector, instances } = connectorHarness({
+      handleRequest(instance, request) {
+        if (request.method !== "session/prompt") return false;
+        instance.notify("session/update", {
+          sessionId: "connector-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "late-reply-bg",
+            name: "run_command",
+            title: "sleep 60",
+            status: "in_progress",
+          },
+        });
+        instance.respond(request, { stopReason: "end_turn" });
+        return true;
+      },
+    });
+
+    let terminateToolCall:
+      | ((toolCallId: string, state: "completed" | "failed" | "canceled") => void)
+      | null = null;
+
+    const registration = runAcpProvider({
+      id: "deferred-quiet-after-cancel",
+      label: "Deferred Quiet After Cancel",
+      connector,
+      acpOptions: {
+        deferTurnOnRunningTools: {
+          settleDelayMs: 30,
+          quietLimitMs: 1_500,
+          observeOpenTools(ctx) {
+            terminateToolCall = ctx.terminateToolCall;
+            return {
+              async sync() {},
+              notify() {},
+              dispose() {},
+            };
+          },
+        },
+      },
+    });
+    const connection = await registration.connect({
+      versions: [1],
+      capabilities: ["prompt.message"],
+    });
+    const events: ProviderEvent[] = [];
+    connection.onEvent((event) => events.push(event));
+    try {
+      await connection.send(openInput());
+      await waitForEvent(events, (event) => event.type === "session.ready");
+
+      await connection.send({
+        type: "session.prompt",
+        sessionId: "session-1",
+        prompt: {
+          clientMessageId: "quiet-cancel-turn",
+          delivery: "auto",
+          input: { type: "message", content: [{ type: "text", text: "run job" }] },
+        },
+      });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "tool_call" &&
+          event.item.id === "late-reply-bg",
+      );
+
+      // Give end_turn and initial observer sync time to enter deferred waiting.
+      await new Promise((resolve) => setTimeout(resolve, 40));
+
+      // Observer cancels the last open tool AFTER end_turn, before any follow-up chunk arrives.
+      terminateToolCall?.("late-reply-bg", "canceled");
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "tool_call" &&
+          event.item.id === "late-reply-bg" &&
+          event.item.status === "canceled",
+      );
+
+      // Wait well past settleDelayMs (30ms): turn must remain open within quietLimitMs for the follow-up reply.
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      expect(
+        events.some(
+          (event) =>
+            event.type === "session.turn" &&
+            event.turnId === "acp:quiet-cancel-turn" &&
+            event.state !== "started",
+        ),
+      ).toBe(false);
+
+      // Follow-up reply arrives after settleDelayMs and settles cleanly on usage_update.
+      const sessionInstance = instances.at(-1);
+      expect(sessionInstance).toBeDefined();
+      sessionInstance?.notify("session/update", {
+        sessionId: "connector-session",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "Canceled after wakeup." },
+        },
+      });
+      sessionInstance?.notify("session/update", {
+        sessionId: "connector-session",
+        update: { sessionUpdate: "usage_update", used: 55, size: 1_000 },
+      });
+
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp:quiet-cancel-turn" &&
+          event.state === "completed",
+      );
+      const completedIndex = events.findIndex(
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp:quiet-cancel-turn" &&
+          event.state === "completed",
+      );
+      const replyIndex = events.findIndex(
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "assistant_message" &&
+          event.item.text === "Canceled after wakeup.",
+      );
+      expect(replyIndex).toBeGreaterThan(-1);
+      expect(replyIndex).toBeLessThan(completedIndex);
+    } finally {
+      await connection.close();
+    }
+  });
+
   it("settles via quietLimitMs when a background tool finishes with no follow-up reply", async () => {
     const { connector, instances } = connectorHarness({
       handleRequest(instance, request) {

@@ -13,9 +13,10 @@ const FALLBACK_TRANSCRIPT_FILENAME = "transcript.jsonl";
 const READ_CHUNK_BYTES = 64 * 1024;
 const DEFAULT_RECONCILE_INTERVAL_MS = 1_000;
 const MAX_RETIRED_TASK_IDS = 4_096;
-// Antigravity transcript timestamps have 1-second resolution; 2s absorbs truncation plus
-// minor wire/event-loop delivery skew while rejecting cancellations from earlier runs.
-const TIMESTAMP_MATCH_TOLERANCE_MS = 2_000;
+// Antigravity stamps RUN_COMMAND Created At when execution starts (1-second resolution);
+// a symmetric 3s window absorbs truncation and wire delivery skew while preventing a
+// cancellation from an earlier or later invocation from matching the wrong call.
+const START_TIME_MATCH_TOLERANCE_MS = 3_000;
 const SAFE_CONVERSATION_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const BACKGROUND_TASK_START =
   /^Created At:\s*([^\n]*)\nTool is running as a background task with task id: (\S+)\nTask Description: ([\s\S]*)$/;
@@ -46,6 +47,12 @@ interface TrackedTask {
 
 interface CanceledTask extends TrackedTask {
   canceledAtMs?: number;
+}
+
+interface CanceledCandidate {
+  taskId: string;
+  startedAtMs: number;
+  canceledAtMs: number;
 }
 
 export interface AntigravityBackgroundTaskObserverOptions {
@@ -166,11 +173,13 @@ export function createAntigravityBackgroundTaskObserver(
   const activeTasks = new Map<string, TrackedTask>();
   const knownTasks = new Map<string, TrackedTask>();
   const unclaimedCanceledTasks = new Map<string, CanceledTask>();
-  const openToolFirstSeenAt = new Map<string, number>();
+  const openToolStartedAt = new Map<string, number>();
   const retiredTaskIds = new Set<string>();
 
   function observedOpenTools(): AcpToolCallSnapshot[] {
-    return context.openToolCalls().filter(isObservedExecuteTool);
+    return context
+      .openToolCalls()
+      .filter((toolCall) => toolCall.status === "in_progress" && isObservedExecuteTool(toolCall));
   }
 
   function syncOpenToolTimestamps(openTools: readonly AcpToolCallSnapshot[]): void {
@@ -178,13 +187,13 @@ export function createAntigravityBackgroundTaskObserver(
     const currentTime = now();
     for (const tool of openTools) {
       currentIds.add(tool.id);
-      if (!openToolFirstSeenAt.has(tool.id)) {
-        openToolFirstSeenAt.set(tool.id, currentTime);
+      if (!openToolStartedAt.has(tool.id)) {
+        openToolStartedAt.set(tool.id, currentTime);
       }
     }
-    for (const id of openToolFirstSeenAt.keys()) {
+    for (const id of openToolStartedAt.keys()) {
       if (!currentIds.has(id)) {
-        openToolFirstSeenAt.delete(id);
+        openToolStartedAt.delete(id);
       }
     }
   }
@@ -214,7 +223,7 @@ export function createAntigravityBackgroundTaskObserver(
   // Only called when no execute tool calls are currently open. Any task whose timestamp is
   // strictly older than (now - tolerance) cannot match a future call that has not opened yet.
   function pruneStaleTrackedTasks(): void {
-    const cutoff = now() - TIMESTAMP_MATCH_TOLERANCE_MS;
+    const cutoff = now() - START_TIME_MATCH_TOLERANCE_MS;
     for (const [taskId, task] of activeTasks) {
       if (task.startedAtMs === undefined || task.startedAtMs < cutoff) {
         activeTasks.delete(taskId);
@@ -532,40 +541,52 @@ export function createAntigravityBackgroundTaskObserver(
   function matchEligibleCancellationsForCommand(
     calls: readonly AcpToolCallSnapshot[],
     activeForCommand: readonly TrackedTask[] | undefined,
-    canceledForCommand: ReadonlyArray<{ taskId: string; timestampMs: number }> | undefined,
+    canceledForCommand: readonly CanceledCandidate[] | undefined,
     currentTime: number,
   ): Array<{ toolCallId: string; taskId: string }> {
     const callEntries = calls
       .map((call) => ({
         id: call.id,
-        openedAt: openToolFirstSeenAt.get(call.id) ?? currentTime,
+        startedAt: openToolStartedAt.get(call.id) ?? currentTime,
       }))
-      .sort((a, b) => b.openedAt - a.openedAt);
-    const earliestCallOpenedAt = callEntries[callEntries.length - 1]?.openedAt ?? currentTime;
+      .sort((a, b) => a.startedAt - b.startedAt);
 
     const hasEligibleActiveTask =
-      activeForCommand?.some(
-        (task) =>
-          task.startedAtMs === undefined ||
-          task.startedAtMs + TIMESTAMP_MATCH_TOLERANCE_MS >= earliestCallOpenedAt,
-      ) ?? false;
+      activeForCommand?.some((task) => {
+        const taskStart = task.startedAtMs;
+        if (taskStart === undefined) return true;
+        return callEntries.some(
+          (call) => Math.abs(taskStart - call.startedAt) <= START_TIME_MATCH_TOLERANCE_MS,
+        );
+      }) ?? false;
     if (hasEligibleActiveTask) return [];
 
     // Random ACP toolCallIds prevent tying one cancellation to a specific call when multiple
     // identical calls remain open; wait until wire completions leave only canceled calls open
-    // and every open call has a causally eligible canceled task.
+    // and every open call has a causally eligible canceled task within its start window.
     if (!canceledForCommand || canceledForCommand.length < callEntries.length) return [];
 
-    const canceledNewestFirst = [...canceledForCommand].sort(
-      (a, b) => b.timestampMs - a.timestampMs,
+    const canceledOldestFirst = [...canceledForCommand].sort(
+      (a, b) => a.startedAtMs - b.startedAtMs || a.canceledAtMs - b.canceledAtMs,
     );
     const matched: Array<{ toolCallId: string; taskId: string }> = [];
-    for (let index = 0; index < callEntries.length; index += 1) {
-      const canceled = canceledNewestFirst[index];
-      if (canceled.timestampMs + TIMESTAMP_MATCH_TOLERANCE_MS < callEntries[index].openedAt) {
+    let taskIndex = 0;
+    for (const call of callEntries) {
+      const minStart = call.startedAt - START_TIME_MATCH_TOLERANCE_MS;
+      const maxStart = call.startedAt + START_TIME_MATCH_TOLERANCE_MS;
+      while (
+        taskIndex < canceledOldestFirst.length &&
+        (canceledOldestFirst[taskIndex].startedAtMs < minStart ||
+          canceledOldestFirst[taskIndex].canceledAtMs < minStart)
+      ) {
+        taskIndex += 1;
+      }
+      const candidate = canceledOldestFirst[taskIndex];
+      if (!candidate || candidate.startedAtMs > maxStart) {
         return [];
       }
-      matched.push({ toolCallId: callEntries[index].id, taskId: canceled.taskId });
+      matched.push({ toolCallId: call.id, taskId: candidate.taskId });
+      taskIndex += 1;
     }
     return matched;
   }
@@ -596,13 +617,17 @@ export function createAntigravityBackgroundTaskObserver(
       else activeByCommand.set(task.command, [task]);
     }
 
-    const canceledByCommand = new Map<string, Array<{ taskId: string; timestampMs: number }>>();
+    const canceledByCommand = new Map<string, CanceledCandidate[]>();
     for (const [taskId, task] of unclaimedCanceledTasks) {
-      const timestampMs = canceledTaskTimestampMs(task);
-      if (timestampMs === undefined) continue;
+      if (task.startedAtMs === undefined || task.canceledAtMs === undefined) continue;
+      const candidate: CanceledCandidate = {
+        taskId,
+        startedAtMs: task.startedAtMs,
+        canceledAtMs: task.canceledAtMs,
+      };
       const list = canceledByCommand.get(task.command);
-      if (list) list.push({ taskId, timestampMs });
-      else canceledByCommand.set(task.command, [{ taskId, timestampMs }]);
+      if (list) list.push(candidate);
+      else canceledByCommand.set(task.command, [candidate]);
     }
 
     const toTerminate: string[] = [];
@@ -751,7 +776,7 @@ export function createAntigravityBackgroundTaskObserver(
       retryScheduled = false;
       stopMonitoring();
       resetParsedSourceState();
-      openToolFirstSeenAt.clear();
+      openToolStartedAt.clear();
       retiredTaskIds.clear();
       source = null;
     },

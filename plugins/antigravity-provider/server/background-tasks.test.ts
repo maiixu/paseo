@@ -597,4 +597,73 @@ describe("createAntigravityBackgroundTaskObserver", () => {
     await harness.observer.sync();
     expect(harness.terminated).toEqual([{ id: "call-bounded", state: "canceled" }]);
   });
+
+  it("does not let a later task's cancellation close an earlier invocation whose wire completion has not arrived yet", async () => {
+    const root = await makeBrainRoot();
+    const convId = "dddddddd-2222-3333-4444-555555555555";
+    const file = await transcriptFile(root, convId);
+    await writeFile(file, "");
+
+    let clockMs = Date.parse("2026-11-23T08:52:00-08:00");
+    const harness = createHarness(convId, root, [], 25, () => clockMs);
+    await harness.observer.sync();
+
+    // Call A opens at 08:52:00.
+    harness.addTool(makeToolCall({ id: "call-a", input: { command_line: "sleep 30" } }));
+
+    // A finishes normally AND B starts 10s later and is canceled BEFORE ACP delivers A's completion or B's open event.
+    clockMs = Date.parse("2026-11-23T08:52:11-08:00");
+    await appendFile(
+      file,
+      [
+        bgStartEntry(`${convId}/task-a`, "sleep 30", "2026-11-23T08:52:00-08:00"),
+        systemEndedEntry(`${convId}/task-a`, "finished", "2026-11-23T16:52:05Z"),
+        bgStartEntry(`${convId}/task-b`, "sleep 30", "2026-11-23T08:52:10-08:00"),
+        genericCancelEntry(`${convId}/task-b`, "2026-11-23T08:52:11-08:00"),
+      ].join("\n") + "\n",
+    );
+
+    // A must NOT be closed by B's cancellation, and B's cancellation must NOT be consumed.
+    await harness.observer.sync();
+    expect(harness.terminated).toEqual([]);
+
+    // Once A closes normally on wire and B opens on wire around 08:52:11, B is canceled cleanly.
+    harness.closeTool("call-a");
+    harness.addTool(makeToolCall({ id: "call-b", input: { command_line: "sleep 30" } }));
+    await harness.observer.sync();
+    expect(harness.terminated).toEqual([{ id: "call-b", state: "canceled" }]);
+  });
+
+  it("anchors the start window when a tool transitions from pending to in_progress after permission wait", async () => {
+    const root = await makeBrainRoot();
+    const convId = "eeeeeeee-2222-3333-4444-555555555555";
+    const file = await transcriptFile(root, convId);
+    await writeFile(file, "");
+
+    let clockMs = Date.parse("2026-11-23T08:53:00-08:00");
+    const harness = createHarness(convId, root, [], 25, () => clockMs);
+    await harness.observer.sync();
+
+    // Tool arrives pending and waits 30 seconds for permission approval.
+    harness.addTool(
+      makeToolCall({ id: "call-perm", status: "pending", input: { command_line: "sleep 30" } }),
+    );
+    await harness.observer.sync();
+    expect(harness.terminated).toEqual([]);
+
+    // Permission granted 30s later: status transitions to in_progress, command starts and is killed.
+    clockMs = Date.parse("2026-11-23T08:53:30-08:00");
+    harness.addTool(
+      makeToolCall({ id: "call-perm", status: "in_progress", input: { command_line: "sleep 30" } }),
+    );
+    await appendFile(
+      file,
+      [
+        bgStartEntry(`${convId}/task-perm`, "sleep 30", "2026-11-23T08:53:30-08:00"),
+        genericCancelEntry(`${convId}/task-perm`, "2026-11-23T08:53:31-08:00"),
+      ].join("\n") + "\n",
+    );
+    await harness.observer.sync();
+    expect(harness.terminated).toEqual([{ id: "call-perm", state: "canceled" }]);
+  });
 });
