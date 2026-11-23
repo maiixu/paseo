@@ -6,7 +6,7 @@ import {
   type ProviderRegistration,
 } from "@getpaseo/plugin/server/provider";
 import { z } from "zod";
-import { createBackgroundTaskTracker } from "./background-tasks.js";
+import { createAntigravityBackgroundTaskObserver } from "./background-tasks.js";
 import { mapToolCall } from "./tool-calls.js";
 
 const legacySession = z.object({
@@ -104,12 +104,12 @@ function describeSignIn(env: Readonly<Record<string, string>>): string {
 
 export interface AntigravityProviderOptions {
   brainRoots?: readonly string[];
+  reconcileIntervalMs?: number;
 }
 
 export function createAntigravityProvider(
   options?: AntigravityProviderOptions,
 ): ProviderRegistration {
-  const backgroundTasks = createBackgroundTaskTracker(options?.brainRoots);
   const provider = runAcpProvider({
     id: "antigravity",
     label: "Antigravity",
@@ -123,21 +123,24 @@ export function createAntigravityProvider(
       loadReplayQuietPeriodMs: 200,
       // COMPAT(antigravityAcpV1DeferredTurn): added in v0.18.0, remove once Antigravity CLI supports ACP v2 state_update.
       deferTurnOnRunningTools: {
-        keepsTurnOpen(toolCall, context) {
+        keepsTurnOpen(toolCall) {
           const input = toolCall.input;
-          if (typeof input === "object" && input !== null && !Array.isArray(input)) {
-            if (input.IsDaemon === true) return false;
+          if (typeof input !== "object" || input === null || Array.isArray(input)) return true;
+          if (input.IsDaemon === true) return false;
 
-            // agy leaves recurring schedules in progress after registering them.
-            const recurringSchedule =
-              toolCall.name === "schedule" &&
-              typeof input.CronExpression === "string" &&
-              input.CronExpression.trim().length > 0;
-            if (recurringSchedule) return false;
-          }
-
+          // agy leaves recurring schedules in progress after registering them.
+          const recurringSchedule =
+            toolCall.name === "schedule" &&
+            typeof input.CronExpression === "string" &&
+            input.CronExpression.trim().length > 0;
+          return !recurringSchedule;
+        },
+        observeOpenTools(context) {
           // agy 1.5.0 emits no tool_call_update when manage_task kills a backgrounded command.
-          return !backgroundTasks.isToolCallCanceled(toolCall, context?.nativeSessionId);
+          return createAntigravityBackgroundTaskObserver(context, {
+            brainRoots: options?.brainRoots,
+            reconcileIntervalMs: options?.reconcileIntervalMs,
+          });
         },
       },
       autoAcceptMode: {

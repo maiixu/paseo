@@ -984,7 +984,7 @@ it("completes turns when manage_task cancels a backgrounded run_command without 
       }
     });
   `);
-  const provider = createAntigravityProvider({ brainRoots: [brainRoot] });
+  const provider = createAntigravityProvider({ brainRoots: [brainRoot], reconcileIntervalMs: 30 });
   const connection = await provider.connect({
     launch: { ...launch, env: { ...launch.env, TRANSCRIPT_PATH: transcriptPath } },
     versions: [1],
@@ -1038,7 +1038,7 @@ it("completes turns when manage_task cancels a backgrounded run_command without 
         item: expect.objectContaining({
           type: "tool_call",
           id: `${nativeSessionId}:1`,
-          status: "completed",
+          status: "canceled",
         }),
       }),
     );
@@ -1092,10 +1092,455 @@ it("completes turns when manage_task cancels a backgrounded run_command without 
         item: expect.objectContaining({
           type: "tool_call",
           id: `${nativeSessionId}:2`,
+          status: "canceled",
+        }),
+      }),
+    );
+  } finally {
+    await connection.close();
+  }
+});
+
+it("settles a deferred turn when cancellation flushes to transcript after the final usage_update", async () => {
+  const brainRoot = await mkdtemp(path.join(tmpdir(), "paseo-antigravity-late-flush-"));
+  directories.push(brainRoot);
+  const nativeSessionId = "510c02f3-7c64-45fb-acf0-52147aae36f9";
+  const logsDir = path.join(brainRoot, nativeSessionId, ".system_generated", "logs");
+  await mkdir(logsDir, { recursive: true });
+  const transcriptPath = path.join(logsDir, "transcript_full.jsonl");
+
+  const { directory, launch } = await launchAgent(`
+    const { appendFileSync } = require("node:fs");
+    const { createInterface } = require("node:readline");
+    const transcript = process.env.TRANSCRIPT_PATH;
+    const sessionId = ${JSON.stringify(nativeSessionId)};
+    const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\\n");
+    const writeLog = (entry) => appendFileSync(transcript, JSON.stringify(entry) + "\\n");
+    createInterface({ input: process.stdin }).on("line", (line) => {
+      const { id, method, params } = JSON.parse(line);
+      switch (method) {
+        case "initialize":
+          send({ id, result: { protocolVersion: 1, agentCapabilities: {} } });
+          break;
+        case "session/new":
+          send({ id, result: { sessionId, configOptions: [
+            { id: "mode", name: "Mode", category: "mode", type: "select", currentValue: "default",
+              options: [{ value: "default", name: "Default" }] },
+          ] } });
+          break;
+        case "session/prompt":
+          send({ method: "session/update", params: { sessionId: params.sessionId, update: {
+            sessionUpdate: "tool_call", toolCallId: "late-flush-call", kind: "execute",
+            title: "sleep 30", status: "in_progress", rawInput: { command_line: "sleep 30" },
+          } } });
+          writeLog({
+            step_index: 1, type: "RUN_COMMAND", status: "RUNNING",
+            content: [
+              "Created At: 2026-11-23T08:47:32-08:00",
+              "Tool is running as a background task with task id: " + sessionId + "/task-1",
+              "Task Description: sleep 30",
+              "Task logs are available at: file:///tmp/task-1.log",
+            ].join("\\n"),
+          });
+          send({ id, result: { stopReason: "end_turn" } });
+          // Emit final reply + usage_update FIRST, then flush transcript cancellation 120ms later with NO further ACP events.
+          setTimeout(() => {
+            send({ method: "session/update", params: { sessionId: params.sessionId, update: {
+              sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Canceled it." },
+            } } });
+            send({ method: "session/update", params: { sessionId: params.sessionId, update: {
+              sessionUpdate: "usage_update", used: 60, size: 1000,
+            } } });
+          }, 40);
+          setTimeout(() => {
+            writeLog({
+              step_index: 2, type: "GENERIC", status: "DONE",
+              content: [
+                "Created At: 2026-11-23T08:47:33-08:00",
+                "Completed At: 2026-11-23T08:47:33-08:00",
+                'Task "' + sessionId + '/task-1" cancelled.',
+              ].join("\\n"),
+            });
+          }, 160);
+          break;
+        case "session/close":
+          send({ id, result: {} });
+          break;
+      }
+    });
+  `);
+  const provider = createAntigravityProvider({ brainRoots: [brainRoot], reconcileIntervalMs: 30 });
+  const connection = await provider.connect({
+    launch: { ...launch, env: { ...launch.env, TRANSCRIPT_PATH: transcriptPath } },
+    versions: [1],
+    capabilities: ["prompt.message"],
+  });
+  const events: ProviderEvent[] = [];
+  connection.onEvent((event) => events.push(event));
+  try {
+    await connection.send({
+      type: "session.open",
+      requestId: "open-late",
+      sessionId: "agy-late-flush",
+      history: "skip",
+      config: { cwd: directory, env: {}, mcpServers: {}, settings: {}, persist: false },
+    });
+    await expect
+      .poll(() => events.find((event) => event.type === "session.ready"), { timeout: 3_000 })
+      .toBeDefined();
+
+    await connection.send({
+      type: "session.prompt",
+      sessionId: "agy-late-flush",
+      prompt: {
+        clientMessageId: "late-flush-turn",
+        delivery: "auto",
+        input: { type: "message", content: [{ type: "text", text: "start and kill" }] },
+      },
+    });
+    await expect
+      .poll(
+        () =>
+          events.find(
+            (event) =>
+              event.type === "session.turn" &&
+              event.turnId === "acp:late-flush-turn" &&
+              event.state === "completed",
+          ),
+        { timeout: 4_000 },
+      )
+      .toBeDefined();
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "timeline.item",
+        item: expect.objectContaining({
+          type: "tool_call",
+          id: "late-flush-call",
+          status: "canceled",
+        }),
+      }),
+    );
+  } finally {
+    await connection.close();
+  }
+});
+
+it("handles parallel identical commands where one is killed and one completes normally on wire", async () => {
+  const brainRoot = await mkdtemp(path.join(tmpdir(), "paseo-antigravity-parallel-"));
+  directories.push(brainRoot);
+  const nativeSessionId = "610c02f3-7c64-45fb-acf0-52147aae36f9";
+  const logsDir = path.join(brainRoot, nativeSessionId, ".system_generated", "logs");
+  await mkdir(logsDir, { recursive: true });
+  const transcriptPath = path.join(logsDir, "transcript_full.jsonl");
+
+  const { directory, launch } = await launchAgent(`
+    const { appendFileSync } = require("node:fs");
+    const { createInterface } = require("node:readline");
+    const transcript = process.env.TRANSCRIPT_PATH;
+    const sessionId = ${JSON.stringify(nativeSessionId)};
+    const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\\n");
+    const writeLog = (entry) => appendFileSync(transcript, JSON.stringify(entry) + "\\n");
+    createInterface({ input: process.stdin }).on("line", (line) => {
+      const { id, method, params } = JSON.parse(line);
+      switch (method) {
+        case "initialize":
+          send({ id, result: { protocolVersion: 1, agentCapabilities: {} } });
+          break;
+        case "session/new":
+          send({ id, result: { sessionId, configOptions: [
+            { id: "mode", name: "Mode", category: "mode", type: "select", currentValue: "default",
+              options: [{ value: "default", name: "Default" }] },
+          ] } });
+          break;
+        case "session/prompt":
+          send({ method: "session/update", params: { sessionId: params.sessionId, update: {
+            sessionUpdate: "tool_call", toolCallId: "parallel-a", kind: "execute",
+            title: "sleep 30", status: "in_progress", rawInput: { command_line: "sleep 30" },
+          } } });
+          send({ method: "session/update", params: { sessionId: params.sessionId, update: {
+            sessionUpdate: "tool_call", toolCallId: "parallel-b", kind: "execute",
+            title: "sleep 30", status: "in_progress", rawInput: { command_line: "sleep 30" },
+          } } });
+          writeLog({
+            step_index: 1, type: "RUN_COMMAND", status: "RUNNING",
+            content: [
+              "Created At: 2026-11-23T08:47:32-08:00",
+              "Tool is running as a background task with task id: " + sessionId + "/task-1",
+              "Task Description: sleep 30",
+              "Task logs are available at: file:///tmp/task-1.log",
+            ].join("\\n"),
+          });
+          writeLog({
+            step_index: 2, type: "RUN_COMMAND", status: "RUNNING",
+            content: [
+              "Created At: 2026-11-23T08:47:32-08:00",
+              "Tool is running as a background task with task id: " + sessionId + "/task-2",
+              "Task Description: sleep 30",
+              "Task logs are available at: file:///tmp/task-2.log",
+            ].join("\\n"),
+          });
+          // Kill A before end_turn while B stays running.
+          writeLog({
+            step_index: 3, type: "GENERIC", status: "DONE",
+            content: [
+              "Created At: 2026-11-23T08:47:33-08:00",
+              "Completed At: 2026-11-23T08:47:33-08:00",
+              'Task "' + sessionId + '/task-1" cancelled.',
+            ].join("\\n"),
+          });
+          send({ id, result: { stopReason: "end_turn" } });
+          // B finishes normally on wire AND in transcript, then agent emits reply + usage_update.
+          setTimeout(() => {
+            writeLog({
+              step_index: 4, type: "SYSTEM_MESSAGE", status: "DONE",
+              content: [
+                "The following is a <SYSTEM_MESSAGE>",
+                '[Message] timestamp=2026-11-23T16:49:02Z sender=' + sessionId + '/task-2 priority=MESSAGE_PRIORITY_LOW content=Task id "' + sessionId + '/task-2" finished with result:',
+                "Step ended.",
+              ].join("\\n"),
+            });
+            send({ method: "session/update", params: { sessionId: params.sessionId, update: {
+              sessionUpdate: "tool_call_update", toolCallId: "parallel-b", status: "completed",
+            } } });
+            send({ method: "session/update", params: { sessionId: params.sessionId, update: {
+              sessionUpdate: "agent_message_chunk", content: { type: "text", text: "B finished and A was killed." },
+            } } });
+            send({ method: "session/update", params: { sessionId: params.sessionId, update: {
+              sessionUpdate: "usage_update", used: 90, size: 1000,
+            } } });
+          }, 80);
+          break;
+        case "session/close":
+          send({ id, result: {} });
+          break;
+      }
+    });
+  `);
+  const provider = createAntigravityProvider({ brainRoots: [brainRoot], reconcileIntervalMs: 30 });
+  const connection = await provider.connect({
+    launch: { ...launch, env: { ...launch.env, TRANSCRIPT_PATH: transcriptPath } },
+    versions: [1],
+    capabilities: ["prompt.message"],
+  });
+  const events: ProviderEvent[] = [];
+  connection.onEvent((event) => events.push(event));
+  try {
+    await connection.send({
+      type: "session.open",
+      requestId: "open-parallel",
+      sessionId: "agy-parallel",
+      history: "skip",
+      config: { cwd: directory, env: {}, mcpServers: {}, settings: {}, persist: false },
+    });
+    await expect
+      .poll(() => events.find((event) => event.type === "session.ready"), { timeout: 3_000 })
+      .toBeDefined();
+
+    await connection.send({
+      type: "session.prompt",
+      sessionId: "agy-parallel",
+      prompt: {
+        clientMessageId: "parallel-turn",
+        delivery: "auto",
+        input: { type: "message", content: [{ type: "text", text: "run two sleeps" }] },
+      },
+    });
+    await expect
+      .poll(
+        () =>
+          events.find(
+            (event) =>
+              event.type === "session.turn" &&
+              event.turnId === "acp:parallel-turn" &&
+              event.state === "completed",
+          ),
+        { timeout: 4_000 },
+      )
+      .toBeDefined();
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "timeline.item",
+        item: expect.objectContaining({
+          type: "tool_call",
+          id: "parallel-a",
+          status: "canceled",
+        }),
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "timeline.item",
+        item: expect.objectContaining({
+          type: "tool_call",
+          id: "parallel-b",
           status: "completed",
         }),
       }),
     );
+  } finally {
+    await connection.close();
+  }
+});
+
+it("does not let pre-existing historical cancellations on session open cancel a fresh run of the same command", async () => {
+  const brainRoot = await mkdtemp(path.join(tmpdir(), "paseo-antigravity-baseline-"));
+  directories.push(brainRoot);
+  const nativeSessionId = "710c02f3-7c64-45fb-acf0-52147aae36f9";
+  const logsDir = path.join(brainRoot, nativeSessionId, ".system_generated", "logs");
+  await mkdir(logsDir, { recursive: true });
+  const transcriptPath = path.join(logsDir, "transcript_full.jsonl");
+  await writeFile(
+    transcriptPath,
+    [
+      JSON.stringify({
+        step_index: 1,
+        type: "RUN_COMMAND",
+        status: "RUNNING",
+        content: [
+          "Created At: 2026-11-23T08:00:00-08:00",
+          `Tool is running as a background task with task id: ${nativeSessionId}/task-1`,
+          "Task Description: sleep 30",
+          "Task logs are available at: file:///tmp/task-1.log",
+        ].join("\n"),
+      }),
+      JSON.stringify({
+        step_index: 2,
+        type: "GENERIC",
+        status: "DONE",
+        content: [
+          "Created At: 2026-11-23T08:00:05-08:00",
+          "Completed At: 2026-11-23T08:00:05-08:00",
+          `Task "${nativeSessionId}/task-1" cancelled.`,
+        ].join("\n"),
+      }),
+    ].join("\n") + "\n",
+  );
+
+  const { directory, launch } = await launchAgent(`
+    const { createInterface } = require("node:readline");
+    const sessionId = ${JSON.stringify(nativeSessionId)};
+    const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\\n");
+    createInterface({ input: process.stdin }).on("line", (line) => {
+      const { id, method, params } = JSON.parse(line);
+      switch (method) {
+        case "initialize":
+          send({ id, result: { protocolVersion: 1, agentCapabilities: {} } });
+          break;
+        case "session/new":
+          send({ id, result: { sessionId, configOptions: [
+            { id: "mode", name: "Mode", category: "mode", type: "select", currentValue: "default",
+              options: [{ value: "default", name: "Default" }] },
+          ] } });
+          break;
+        case "session/prompt":
+          // Start a fresh sleep 30 before any new RUN_COMMAND row has flushed to disk.
+          send({ method: "session/update", params: { sessionId: params.sessionId, update: {
+            sessionUpdate: "tool_call", toolCallId: "fresh-sleep", kind: "execute",
+            title: "sleep 30", status: "in_progress", rawInput: { command_line: "sleep 30" },
+          } } });
+          send({ id, result: { stopReason: "end_turn" } });
+          setTimeout(() => {
+            send({ method: "session/update", params: { sessionId: params.sessionId, update: {
+              sessionUpdate: "tool_call_update", toolCallId: "fresh-sleep", status: "completed",
+            } } });
+            send({ method: "session/update", params: { sessionId: params.sessionId, update: {
+              sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Fresh run finished." },
+            } } });
+            send({ method: "session/update", params: { sessionId: params.sessionId, update: {
+              sessionUpdate: "usage_update", used: 75, size: 1000,
+            } } });
+          }, 150);
+          break;
+        case "session/close":
+          send({ id, result: {} });
+          break;
+      }
+    });
+  `);
+  const provider = createAntigravityProvider({ brainRoots: [brainRoot], reconcileIntervalMs: 30 });
+  const connection = await provider.connect({
+    launch,
+    versions: [1],
+    capabilities: ["prompt.message"],
+  });
+  const events: ProviderEvent[] = [];
+  connection.onEvent((event) => events.push(event));
+  try {
+    await connection.send({
+      type: "session.open",
+      requestId: "open-baseline",
+      sessionId: "agy-baseline",
+      history: "skip",
+      config: { cwd: directory, env: {}, mcpServers: {}, settings: {}, persist: false },
+    });
+    await expect
+      .poll(() => events.find((event) => event.type === "session.ready"), { timeout: 3_000 })
+      .toBeDefined();
+
+    await connection.send({
+      type: "session.prompt",
+      sessionId: "agy-baseline",
+      prompt: {
+        clientMessageId: "fresh-turn",
+        delivery: "auto",
+        input: { type: "message", content: [{ type: "text", text: "run fresh sleep" }] },
+      },
+    });
+    await expect
+      .poll(
+        () =>
+          events.find(
+            (event) =>
+              event.type === "timeline.item" &&
+              event.item.type === "tool_call" &&
+              event.item.id === "fresh-sleep" &&
+              event.item.status === "running",
+          ),
+        { timeout: 3_000 },
+      )
+      .toBeDefined();
+    // Wait briefly and confirm the turn stays deferred rather than prematurely canceling fresh-sleep.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(
+      events.some(
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp:fresh-turn" &&
+          event.state === "completed",
+      ),
+    ).toBe(false);
+
+    await expect
+      .poll(
+        () =>
+          events.find(
+            (event) =>
+              event.type === "session.turn" &&
+              event.turnId === "acp:fresh-turn" &&
+              event.state === "completed",
+          ),
+        { timeout: 4_000 },
+      )
+      .toBeDefined();
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "timeline.item",
+        item: expect.objectContaining({
+          type: "tool_call",
+          id: "fresh-sleep",
+          status: "completed",
+        }),
+      }),
+    );
+    expect(
+      events.some(
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "tool_call" &&
+          event.item.id === "fresh-sleep" &&
+          event.item.status === "canceled",
+      ),
+    ).toBe(false);
   } finally {
     await connection.close();
   }

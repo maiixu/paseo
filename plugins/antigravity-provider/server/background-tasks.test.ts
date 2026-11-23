@@ -1,22 +1,24 @@
-import { appendFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { AcpToolCallSnapshot } from "@getpaseo/plugin/server/acp";
+import type { AcpDeferredToolObserver, AcpToolCallSnapshot } from "@getpaseo/plugin/server/acp";
 import { afterEach, describe, expect, it } from "vitest";
-import { createBackgroundTaskTracker } from "./background-tasks.js";
+import { createAntigravityBackgroundTaskObserver } from "./background-tasks.js";
 
-const directories: string[] = [];
+const tempDirs: string[] = [];
+const activeObservers: AcpDeferredToolObserver[] = [];
 
 afterEach(async () => {
-  await Promise.all(
-    directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })),
-  );
+  while (activeObservers.length > 0) {
+    activeObservers.pop()?.dispose();
+  }
+  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
 async function makeBrainRoot() {
-  const root = await mkdtemp(path.join(tmpdir(), "paseo-agy-bg-tasks-"));
-  directories.push(root);
-  return root;
+  const dir = await mkdtemp(path.join(tmpdir(), "paseo-agy-bg-tasks-"));
+  tempDirs.push(dir);
+  return dir;
 }
 
 async function transcriptFile(
@@ -31,7 +33,7 @@ async function transcriptFile(
 
 function makeToolCall(overrides: Partial<AcpToolCallSnapshot> = {}): AcpToolCallSnapshot {
   return {
-    id: "410c02f3-7c64-45fb-acf0-52147aae36f9:10",
+    id: "26835c4d176642b5b20ecbc535f60e00",
     title: "sleep 30",
     kind: "execute",
     status: "in_progress",
@@ -39,6 +41,42 @@ function makeToolCall(overrides: Partial<AcpToolCallSnapshot> = {}): AcpToolCall
     output: null,
     locations: [],
     ...overrides,
+  };
+}
+
+function createHarness(
+  nativeSessionId: string,
+  brainRoot: string,
+  initialTools: AcpToolCallSnapshot[] = [],
+  reconcileIntervalMs = 25,
+) {
+  const open = new Map<string, AcpToolCallSnapshot>(initialTools.map((tool) => [tool.id, tool]));
+  const terminated: Array<{ id: string; state: "completed" | "failed" | "canceled" }> = [];
+  const observer = createAntigravityBackgroundTaskObserver(
+    {
+      nativeSessionId,
+      openToolCalls: () => [...open.values()],
+      terminateToolCall(id, state) {
+        if (!open.delete(id)) return;
+        terminated.push({ id, state });
+        observer.notify();
+      },
+    },
+    { brainRoots: [brainRoot], reconcileIntervalMs },
+  );
+  activeObservers.push(observer);
+  return {
+    observer,
+    open,
+    terminated,
+    addTool(tool: AcpToolCallSnapshot) {
+      open.set(tool.id, tool);
+      observer.notify();
+    },
+    closeTool(id: string) {
+      open.delete(id);
+      observer.notify();
+    },
   };
 }
 
@@ -69,7 +107,7 @@ function genericCancelEntry(taskId: string) {
   });
 }
 
-function systemEndedEntry(taskId: string, outcome: "was canceled" | "finished") {
+function systemEndedEntry(taskId: string, outcome: "was canceled" | "finished" | "failed") {
   return JSON.stringify({
     step_index: 5,
     type: "SYSTEM_MESSAGE",
@@ -82,30 +120,49 @@ function systemEndedEntry(taskId: string, outcome: "was canceled" | "finished") 
   });
 }
 
-describe("createBackgroundTaskTracker", () => {
-  it("returns false while a background command is active and true once canceled via GENERIC", async () => {
+describe("createAntigravityBackgroundTaskObserver", () => {
+  it("terminates a backgrounded command once canceled via GENERIC and detects late flushes asynchronously", async () => {
     const root = await makeBrainRoot();
     const convId = "410c02f3-7c64-45fb-acf0-52147aae36f9";
     const file = await transcriptFile(root, convId);
-    const tracker = createBackgroundTaskTracker([root]);
-    const toolCall = makeToolCall();
+    const harness = createHarness(convId, root);
+    await harness.observer.sync();
 
-    expect(tracker.isToolCallCanceled(toolCall, convId)).toBe(false);
-
+    const toolCall = makeToolCall({ id: "call-1" });
+    harness.addTool(toolCall);
     await writeFile(file, `${bgStartEntry(`${convId}/task-2`, "sleep 30")}\n`);
-    expect(tracker.isToolCallCanceled(toolCall, convId)).toBe(false);
+    await harness.observer.sync();
+    expect(harness.terminated).toEqual([]);
 
+    // Late cancellation flush without any manual sync() call is detected by watcher/interval.
     await appendFile(file, `${genericCancelEntry(`${convId}/task-2`)}\n`);
-    expect(tracker.isToolCallCanceled(toolCall, convId)).toBe(true);
-    // Subsequent checks stay true once claimed.
-    expect(tracker.isToolCallCanceled(toolCall, convId)).toBe(true);
+    await expect
+      .poll(() => harness.terminated, { timeout: 2_000 })
+      .toEqual([{ id: "call-1", state: "canceled" }]);
   });
 
-  it("supports CommandLine, title fallback, CRLF normalization, and UUID fallback from toolCall.id", async () => {
+  it("supports CommandLine, title fallback, and CRLF normalization", async () => {
     const root = await makeBrainRoot();
     const convId = "11111111-2222-3333-4444-555555555555";
     const file = await transcriptFile(root, convId, "transcript.jsonl");
-    const tracker = createBackgroundTaskTracker([root]);
+    const harness = createHarness(convId, root);
+    await harness.observer.sync();
+
+    harness.addTool(
+      makeToolCall({
+        id: "call-multiline",
+        name: "run_command",
+        input: { CommandLine: "echo a\r\necho b\n" },
+      }),
+    );
+    harness.addTool(
+      makeToolCall({
+        id: "call-title",
+        kind: "execute",
+        title: "  npm test  ",
+        input: null,
+      }),
+    );
 
     await writeFile(
       file,
@@ -116,34 +173,31 @@ describe("createBackgroundTaskTracker", () => {
         systemEndedEntry(`${convId}/task-2`, "was canceled"),
       ].join("\n") + "\n",
     );
+    await harness.observer.sync();
 
-    expect(
-      tracker.isToolCallCanceled(
-        makeToolCall({
-          id: `${convId}:1`,
-          name: "run_command",
-          input: { CommandLine: "echo a\r\necho b\n" },
-        }),
-      ),
-    ).toBe(true);
-
-    expect(
-      tracker.isToolCallCanceled(
-        makeToolCall({
-          id: `${convId}:2`,
-          kind: "execute",
-          title: "  npm test  ",
-          input: null,
-        }),
-      ),
-    ).toBe(true);
+    expect(harness.terminated).toEqual([
+      { id: "call-multiline", state: "canceled" },
+      { id: "call-title", state: "canceled" },
+    ]);
   });
 
-  it("does not mark normally finished tasks or non-execute tools as canceled", async () => {
+  it("does not cancel normally finished, failed, or non-execute tools, and clears failed tasks from active state", async () => {
     const root = await makeBrainRoot();
     const convId = "22222222-2222-3333-4444-555555555555";
     const file = await transcriptFile(root, convId);
-    const tracker = createBackgroundTaskTracker([root]);
+    const harness = createHarness(convId, root);
+    await harness.observer.sync();
+
+    harness.addTool(makeToolCall({ id: "call-finished", input: { command_line: "sleep 2" } }));
+    harness.addTool(
+      makeToolCall({
+        id: "call-schedule",
+        name: "schedule",
+        kind: "other",
+        title: "sleep 2",
+        input: { DurationSeconds: 60 },
+      }),
+    );
 
     await writeFile(
       file,
@@ -152,57 +206,40 @@ describe("createBackgroundTaskTracker", () => {
         systemEndedEntry(`${convId}/task-1`, "finished"),
       ].join("\n") + "\n",
     );
+    await harness.observer.sync();
+    expect(harness.terminated).toEqual([]);
 
-    expect(
-      tracker.isToolCallCanceled(
-        makeToolCall({ id: `${convId}:1`, input: { command_line: "sleep 2" } }),
-        convId,
-      ),
-    ).toBe(false);
-
-    expect(
-      tracker.isToolCallCanceled(
-        makeToolCall({
-          id: `${convId}:2`,
-          name: "schedule",
-          kind: "other",
-          title: "sleep 2",
-          input: { DurationSeconds: 60 },
-        }),
-        convId,
-      ),
-    ).toBe(false);
-  });
-
-  it("ignores transcript-like text echoed in a DONE RUN_COMMAND output", async () => {
-    const root = await makeBrainRoot();
-    const convId = "33333333-2222-3333-4444-555555555555";
-    const file = await transcriptFile(root, convId);
-    const tracker = createBackgroundTaskTracker([root]);
-
-    await writeFile(
+    // Two identical commands: task-2 is canceled, task-3 fails with result.
+    // Once task-3 fails and closes on wire, task-3 must no longer block canceling task-2's call.
+    harness.addTool(makeToolCall({ id: "call-a", input: { command_line: "sleep 30" } }));
+    harness.addTool(makeToolCall({ id: "call-b", input: { command_line: "sleep 30" } }));
+    await appendFile(
       file,
       [
-        bgStartEntry(`${convId}/task-1`, "sleep 30"),
-        JSON.stringify({
-          step_index: 3,
-          type: "RUN_COMMAND",
-          status: "DONE",
-          content: `Created At: 2026-11-23T08:49:00-08:00\nCompleted At: 2026-11-23T08:49:00-08:00\nOutput:\nTask "${convId}/task-1" cancelled.`,
-        }),
+        bgStartEntry(`${convId}/task-2`, "sleep 30"),
+        bgStartEntry(`${convId}/task-3`, "sleep 30"),
+        genericCancelEntry(`${convId}/task-2`),
       ].join("\n") + "\n",
     );
+    await harness.observer.sync();
+    expect(harness.terminated).toEqual([]);
 
-    expect(tracker.isToolCallCanceled(makeToolCall({ id: `${convId}:1` }), convId)).toBe(false);
+    harness.closeTool("call-b");
+    await appendFile(file, `${systemEndedEntry(`${convId}/task-3`, "failed")}\n`);
+    await harness.observer.sync();
+    expect(harness.terminated).toEqual([{ id: "call-a", state: "canceled" }]);
   });
 
-  it("keeps identical parallel commands open while one instance is still active and avoids double-claiming on rerun", async () => {
+  it("cancels only the killed call when parallel identical commands have one wire-completed and one killed", async () => {
     const root = await makeBrainRoot();
     const convId = "44444444-2222-3333-4444-555555555555";
     const file = await transcriptFile(root, convId);
-    const tracker = createBackgroundTaskTracker([root]);
+    const harness = createHarness(convId, root);
+    await harness.observer.sync();
 
-    // Two parallel runs of the same command: task-1 canceled, task-2 still active.
+    harness.addTool(makeToolCall({ id: "call-a", input: { command_line: "sleep 30" } }));
+    harness.addTool(makeToolCall({ id: "call-b", input: { command_line: "sleep 30" } }));
+
     await writeFile(
       file,
       [
@@ -211,43 +248,139 @@ describe("createBackgroundTaskTracker", () => {
         genericCancelEntry(`${convId}/task-1`),
       ].join("\n") + "\n",
     );
-    const call1 = makeToolCall({ id: `${convId}:1` });
-    const call2 = makeToolCall({ id: `${convId}:2` });
-    expect(tracker.isToolCallCanceled(call1, convId)).toBe(false);
+    await harness.observer.sync();
+    expect(harness.terminated).toEqual([]);
 
-    // Once task-2 finishes normally, no active "sleep 30" remains, so call1 claims task-1.
+    // call-b completes via wire while call-a remains open.
+    harness.closeTool("call-b");
     await appendFile(file, `${systemEndedEntry(`${convId}/task-2`, "finished")}\n`);
-    expect(tracker.isToolCallCanceled(call1, convId)).toBe(true);
-    // Trailing SYSTEM_MESSAGE for already-claimed task-1 must not allow a later rerun to claim it.
+    await harness.observer.sync();
+    expect(harness.terminated).toEqual([{ id: "call-a", state: "canceled" }]);
+
+    // Trailing SYSTEM_MESSAGE for task-1 must not poison a subsequent new run of sleep 30.
+    harness.addTool(makeToolCall({ id: "call-c", input: { command_line: "sleep 30" } }));
     await appendFile(file, `${systemEndedEntry(`${convId}/task-1`, "was canceled")}\n`);
-    expect(tracker.isToolCallCanceled(call2, convId)).toBe(false);
+    await harness.observer.sync();
+    expect(harness.terminated).toEqual([{ id: "call-a", state: "canceled" }]);
   });
 
-  it("handles partial trailing lines and file truncation cleanly", async () => {
+  it("retires pre-existing historical cancellations during initial open baseline", async () => {
+    const root = await makeBrainRoot();
+    const convId = "66666666-2222-3333-4444-555555555555";
+    const file = await transcriptFile(root, convId);
+
+    // Historical canceled task already on disk before session opens / reloads.
+    await writeFile(
+      file,
+      [bgStartEntry(`${convId}/task-1`, "sleep 30"), genericCancelEntry(`${convId}/task-1`)].join(
+        "\n",
+      ) + "\n",
+    );
+
+    const harness = createHarness(convId, root);
+    // Initial sync with no open tools baselines and retires task-1.
+    await harness.observer.sync();
+
+    // Brand-new run of the same command must NOT claim the historical cancellation.
+    harness.addTool(makeToolCall({ id: "new-call", input: { command_line: "sleep 30" } }));
+    await harness.observer.sync();
+    expect(harness.terminated).toEqual([]);
+  });
+
+  it("upgrades from fallback transcript.jsonl to transcript_full.jsonl and handles equal/larger inode replacement", async () => {
+    const root = await makeBrainRoot();
+    const convId = "77777777-2222-3333-4444-555555555555";
+    const fallbackFile = await transcriptFile(root, convId, "transcript.jsonl");
+    const primaryFile = path.join(path.dirname(fallbackFile), "transcript_full.jsonl");
+
+    // Start with only fallback transcript.jsonl containing an already-retired historical task.
+    await writeFile(
+      fallbackFile,
+      [bgStartEntry(`${convId}/task-1`, "sleep 30"), genericCancelEntry(`${convId}/task-1`)].join(
+        "\n",
+      ) + "\n",
+    );
+
+    const harness = createHarness(convId, root);
+    await harness.observer.sync();
+
+    // Now transcript_full.jsonl appears with task-1 (already retired) plus a new canceled task-2.
+    harness.addTool(makeToolCall({ id: "call-2", input: { command_line: "sleep 30" } }));
+    await writeFile(
+      primaryFile,
+      [
+        bgStartEntry(`${convId}/task-1`, "sleep 30"),
+        genericCancelEntry(`${convId}/task-1`),
+        bgStartEntry(`${convId}/task-2`, "sleep 30"),
+        genericCancelEntry(`${convId}/task-2`),
+      ].join("\n") + "\n",
+    );
+    await harness.observer.sync();
+    expect(harness.terminated).toEqual([{ id: "call-2", state: "canceled" }]);
+
+    // Atomically replace transcript_full.jsonl with a larger file on a new inode containing task-3.
+    harness.addTool(makeToolCall({ id: "call-3", input: { command_line: "sleep 45" } }));
+    const replacementTmp = `${primaryFile}.tmp`;
+    const padding = JSON.stringify({
+      step_index: 0,
+      type: "PLANNER_RESPONSE",
+      content: "x".repeat(4096),
+    });
+    await writeFile(
+      replacementTmp,
+      [
+        padding,
+        bgStartEntry(`${convId}/task-1`, "sleep 30"),
+        genericCancelEntry(`${convId}/task-1`),
+        bgStartEntry(`${convId}/task-3`, "sleep 45"),
+        genericCancelEntry(`${convId}/task-3`),
+      ].join("\n") + "\n",
+    );
+    await unlink(primaryFile);
+    await rename(replacementTmp, primaryFile);
+    await harness.observer.sync();
+
+    expect(harness.terminated).toEqual([
+      { id: "call-2", state: "canceled" },
+      { id: "call-3", state: "canceled" },
+    ]);
+  });
+
+  it("handles chunked >64KiB lines, partial trailing lines, and DONE RUN_COMMAND stdout echoes", async () => {
     const root = await makeBrainRoot();
     const convId = "55555555-2222-3333-4444-555555555555";
     const file = await transcriptFile(root, convId);
-    const tracker = createBackgroundTaskTracker([root]);
-    const call = makeToolCall({ id: `${convId}:1` });
+    const harness = createHarness(convId, root);
+    await harness.observer.sync();
 
+    harness.addTool(makeToolCall({ id: "call-big", input: { command_line: "sleep 30" } }));
+
+    // Write a >90 KiB non-lifecycle line, then bg start, then a DONE RUN_COMMAND echoing cancel text,
+    // then half of the real GENERIC cancel line without trailing newline.
+    const hugeNoiseLine = JSON.stringify({
+      step_index: 1,
+      type: "PLANNER_RESPONSE",
+      status: "DONE",
+      content: "y".repeat(90_000),
+    });
+    const echoLine = JSON.stringify({
+      step_index: 3,
+      type: "RUN_COMMAND",
+      status: "DONE",
+      content: `Created At: 2026-11-23T08:49:00-08:00\nCompleted At: 2026-11-23T08:49:00-08:00\nOutput:\nTask "${convId}/task-1" cancelled.`,
+    });
     const cancelLine = genericCancelEntry(`${convId}/task-1`);
     const splitAt = Math.floor(cancelLine.length / 2);
+
     await writeFile(
       file,
-      `${bgStartEntry(`${convId}/task-1`, "sleep 30")}\n${cancelLine.slice(0, splitAt)}`,
+      `${hugeNoiseLine}\n${bgStartEntry(`${convId}/task-1`, "sleep 30")}\n${echoLine}\n${cancelLine.slice(0, splitAt)}`,
     );
-    expect(tracker.isToolCallCanceled(call, convId)).toBe(false);
+    await harness.observer.sync();
+    expect(harness.terminated).toEqual([]);
 
     await appendFile(file, `${cancelLine.slice(splitAt)}\n`);
-    expect(tracker.isToolCallCanceled(call, convId)).toBe(true);
-
-    // Truncated transcript resets state cleanly without throwing.
-    await writeFile(file, `${bgStartEntry(`${convId}/task-9`, "sleep 60")}\n`);
-    expect(
-      tracker.isToolCallCanceled(
-        makeToolCall({ id: `${convId}:9`, input: { command_line: "sleep 60" } }),
-        convId,
-      ),
-    ).toBe(false);
+    await harness.observer.sync();
+    expect(harness.terminated).toEqual([{ id: "call-big", state: "canceled" }]);
   });
 });

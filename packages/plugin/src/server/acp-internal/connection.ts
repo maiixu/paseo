@@ -25,6 +25,7 @@ import type {
   AcpConfigAccess,
   AcpConfigChange,
   AcpConfigureContext,
+  AcpDeferredToolObserver,
   AcpRequest,
   AcpToolCallSnapshot,
   AcpTransformer,
@@ -403,6 +404,8 @@ interface ActivePrompt {
   wirePromptLane: Promise<void>;
   lastPromptResponseWireSeq: number | null;
   crossedEndTurn: boolean;
+  hasPostPromptActivity: boolean;
+  sawObservedCancellation: boolean;
   replyState: DeferredReplyState;
   deferred: DeferredTurnState | null;
 }
@@ -475,6 +478,7 @@ class AcpRuntime {
   private readonly sessionUpdateWireSeqs: number[] = [];
   private autoAccept = false;
   private activePrompt: ActivePrompt | null = null;
+  private deferredToolObserver: AcpDeferredToolObserver | null = null;
   private lastUsage: ProviderUsage = {};
 
   static async start(options: StartRuntimeOptions): Promise<AcpRuntime> {
@@ -668,6 +672,7 @@ class AcpRuntime {
     });
     this.emitConfig();
     await this.finishSessionOpen(isConnectionClosed);
+    await this.startDeferredToolObserver();
     return sessionCapabilities;
   }
 
@@ -799,6 +804,8 @@ class AcpRuntime {
       wirePromptLane: Promise.resolve(),
       lastPromptResponseWireSeq: null,
       crossedEndTurn: false,
+      hasPostPromptActivity: false,
+      sawObservedCancellation: false,
       replyState: "idle",
       deferred: null,
     };
@@ -825,6 +832,9 @@ class AcpRuntime {
           });
         }
         const state = response.stopReason === "cancelled" ? "canceled" : "completed";
+        if (response.stopReason === "end_turn" && this.hasQualifyingOpenTools()) {
+          await this.syncDeferredToolObserver();
+        }
         if (response.stopReason === "end_turn" && this.shouldDeferTurn(activePrompt)) {
           await this.settleDeferredPrompt(activePrompt);
           return undefined;
@@ -881,6 +891,7 @@ class AcpRuntime {
 
   private async retireDeferredTurn(active: ActivePrompt, deferredTurnId: string): Promise<boolean> {
     active.cancelling = true;
+    this.disposeDeferredToolObserver();
     // Record open tools owned by Stop before writing session/cancel so any failure
     // update arriving during cancel preserves their canceled state.
     for (const id of this.liveOpenToolIds) this.canceledToolCallIds.add(id);
@@ -1524,11 +1535,12 @@ class AcpRuntime {
     options?: { preserveQualifyingOpenTools?: boolean; suppressTrailingToolEcho?: boolean },
   ): void {
     const preserve = options?.preserveQualifyingOpenTools === true;
+    let closedLiveTools = false;
     for (const [id, tool] of this.toolCalls) {
       const snapshot = tool.presentation;
       if (snapshot.status !== "pending" && snapshot.status !== "in_progress") continue;
       if (preserve && this.liveOpenToolIds.has(id) && this.toolKeepsTurnOpen(snapshot)) continue;
-      this.liveOpenToolIds.delete(id);
+      if (this.liveOpenToolIds.delete(id)) closedLiveTools = true;
       if (options?.suppressTrailingToolEcho) this.canceledToolCallIds.add(id);
       const completed: AcpToolCallSnapshot = {
         ...snapshot,
@@ -1560,6 +1572,7 @@ class AcpRuntime {
       });
     }
     this.pendingCompactions.clear();
+    if (closedLiveTools) this.deferredToolObserver?.notify();
   }
 
   private reduceToolCall(
@@ -1582,24 +1595,7 @@ class AcpRuntime {
       this.liveOpenToolIds.has(current.id) &&
       this.toolKeepsTurnOpen(current);
     const source = mergeToolCallSnapshot(update, tool?.source);
-    let snapshot: AcpToolCallSnapshot = source;
-    const context = {
-      sessionId: this.options.boundarySessionId,
-      mcpServerNames: this.mcpServerNames,
-    };
-    for (const transformer of this.transformers)
-      snapshot = transformer.toolCall?.(snapshot, context) ?? snapshot;
-    if (!snapshot.detail && source.diff && snapshot.kind === "edit") {
-      snapshot = {
-        ...snapshot,
-        detail: {
-          type: "edit",
-          filePath: source.diff.path,
-          oldString: source.diff.oldText ?? undefined,
-          newString: source.diff.newText,
-        },
-      };
-    }
+    const snapshot = this.presentToolCallSnapshot(source);
     this.toolCalls.set(snapshot.id, { source, presentation: snapshot });
     const isOpen = snapshot.status === "pending" || snapshot.status === "in_progress";
     if (this.replayWindow === null) {
@@ -1611,9 +1607,49 @@ class AcpRuntime {
       sessionId: this.options.boundarySessionId,
       item: toolTimelineItem(snapshot),
     });
+    this.noteWireToolCall(wasOpenQualifying, isOpen, snapshot, wireSeq);
+  }
+
+  private presentToolCallSnapshot(source: AcpToolCallSource): AcpToolCallSnapshot {
+    let snapshot: AcpToolCallSnapshot = source;
+    const context = {
+      sessionId: this.options.boundarySessionId,
+      mcpServerNames: this.mcpServerNames,
+    };
+    for (const transformer of this.transformers) {
+      snapshot = transformer.toolCall?.(snapshot, context) ?? snapshot;
+    }
+    if (!snapshot.detail && source.diff && snapshot.kind === "edit") {
+      return {
+        ...snapshot,
+        detail: {
+          type: "edit",
+          filePath: source.diff.path,
+          oldString: source.diff.oldText ?? undefined,
+          newString: source.diff.newText,
+        },
+      };
+    }
+    return snapshot;
+  }
+
+  private noteWireToolCall(
+    wasOpenQualifying: boolean,
+    isOpen: boolean,
+    snapshot: AcpToolCallSnapshot,
+    wireSeq: number,
+  ): void {
+    const active = this.activePrompt;
+    if (active && this.isPostWirePrompt(active, wireSeq)) {
+      active.hasPostPromptActivity = true;
+    }
     const isOpenQualifying =
       this.liveOpenToolIds.has(snapshot.id) && this.toolKeepsTurnOpen(snapshot);
+    if (active && (isOpenQualifying || (wasOpenQualifying && !isOpen))) {
+      active.sawObservedCancellation = false;
+    }
     this.noteDeferredToolTransition(wasOpenQualifying, isOpenQualifying, isOpen, snapshot, wireSeq);
+    if (this.replayWindow === null) this.deferredToolObserver?.notify();
   }
 
   private vendorNotification(method: string, params: unknown): void {
@@ -1689,6 +1725,7 @@ class AcpRuntime {
   }
 
   private settlePendingWork(failureMessage?: string): void {
+    this.disposeDeferredToolObserver();
     for (const permission of this.permissions.values()) {
       permission.resolve({ outcome: { outcome: "cancelled" } });
     }
@@ -1776,78 +1813,98 @@ class AcpRuntime {
     });
     const runSteer = async (): Promise<void> => {
       try {
-        if (
-          this.closing ||
-          this.processFailed ||
-          active.cancelling ||
-          active.deferred !== deferred
-        ) {
-          return;
-        }
+        if (this.isDeferredSteerAborted(active, deferred)) return;
         this.fallbackChunkIds.clear();
         active.lastPromptResponseWireSeq = null;
+        active.hasPostPromptActivity = false;
+        active.sawObservedCancellation = false;
         if (active.replyState === "settled_with_open_tools") active.replyState = "idle";
         const response = await this.call(
           this.connection.prompt({ sessionId: this.nativeSessionId, prompt }),
         );
         await this.drainNotifications();
-        if (this.closing || this.deferredRetirement || active.deferred !== deferred) return;
-        if (response.usage) {
-          this.lastUsage = {
-            ...this.lastUsage,
-            inputTokens: response.usage.inputTokens,
-            outputTokens: response.usage.outputTokens,
-            cachedInputTokens: response.usage.cachedReadTokens ?? undefined,
-          };
-          this.emit({
-            type: "session.usage",
-            sessionId: this.options.boundarySessionId,
-            turnId: active.turnId,
-            usage: this.lastUsage,
-          });
+        if (this.isDeferredSteerRetired(active, deferred)) return;
+        if (response.stopReason === "end_turn" && this.hasQualifyingOpenTools()) {
+          await this.syncDeferredToolObserver();
         }
-        if (response.stopReason === "cancelled") {
-          this.finishDeferredTurn(active, { type: "cancel" });
-          return;
-        }
-        if (response.stopReason !== "end_turn" && active.wirePromptsInFlight === 1) {
-          this.finishDeferredTurn(active, { type: "complete", terminalizeTools: true });
-        }
+        if (this.isDeferredSteerRetired(active, deferred)) return;
+        this.handleSteerResponse(active, response);
       } catch (error) {
         await this.drainNotifications();
-        if (this.closing || this.deferredRetirement || active.deferred !== deferred) return;
-        if (this.processFailed) {
-          this.finishDeferredTurn(active, {
-            type: "fail",
-            error: { message: describeError(error) },
-          });
-        } else {
-          this.emit({
-            type: "session.notice",
-            sessionId: this.options.boundarySessionId,
-            notice: {
-              id: `acp:steer-error:${input.prompt.clientMessageId}`,
-              severity: "error",
-              title: "Follow-up prompt failed",
-              description: describeError(error),
-            },
-          });
-        }
+        if (this.isDeferredSteerRetired(active, deferred)) return;
+        this.handleSteerError(active, input.prompt.clientMessageId, error);
       } finally {
         if (active.lastPromptResponseWireSeq === null) {
           active.lastPromptResponseWireSeq = this.incomingWireSeq;
         }
         active.wirePromptsInFlight -= 1;
+        this.maybeSettleAfterObservedCancellation(active);
         this.scheduleDeferredSettle();
       }
     };
     active.wirePromptLane = active.wirePromptLane.then(runSteer);
   }
 
+  private isDeferredSteerAborted(active: ActivePrompt, deferred: DeferredTurnState): boolean {
+    return this.closing || this.processFailed || active.cancelling || active.deferred !== deferred;
+  }
+
+  private isDeferredSteerRetired(active: ActivePrompt, deferred: DeferredTurnState): boolean {
+    return this.closing || this.deferredRetirement !== null || active.deferred !== deferred;
+  }
+
+  private handleSteerResponse(
+    active: ActivePrompt,
+    response: Awaited<ReturnType<ClientSideConnection["prompt"]>>,
+  ): void {
+    if (response.usage) {
+      this.lastUsage = {
+        ...this.lastUsage,
+        inputTokens: response.usage.inputTokens,
+        outputTokens: response.usage.outputTokens,
+        cachedInputTokens: response.usage.cachedReadTokens ?? undefined,
+      };
+      this.emit({
+        type: "session.usage",
+        sessionId: this.options.boundarySessionId,
+        turnId: active.turnId,
+        usage: this.lastUsage,
+      });
+    }
+    if (response.stopReason === "cancelled") {
+      this.finishDeferredTurn(active, { type: "cancel" });
+      return;
+    }
+    if (response.stopReason !== "end_turn" && active.wirePromptsInFlight === 1) {
+      this.finishDeferredTurn(active, { type: "complete", terminalizeTools: true });
+    }
+  }
+
+  private handleSteerError(active: ActivePrompt, clientMessageId: string, error: unknown): void {
+    if (this.processFailed) {
+      this.finishDeferredTurn(active, {
+        type: "fail",
+        error: { message: describeError(error) },
+      });
+      return;
+    }
+    this.emit({
+      type: "session.notice",
+      sessionId: this.options.boundarySessionId,
+      notice: {
+        id: `acp:steer-error:${clientMessageId}`,
+        severity: "error",
+        title: "Follow-up prompt failed",
+        description: describeError(error),
+      },
+    });
+  }
+
   private async settleDeferredPrompt(active: ActivePrompt): Promise<void> {
     this.fallbackChunkIds.clear();
     const outcome = await new Promise<DeferredTurnOutcome>((resolve) => {
       active.deferred = { timer: null, resolve };
+      this.deferredToolObserver?.notify();
       this.scheduleDeferredSettle();
     });
     if (this.closing || this.deferredRetirement) return;
@@ -1869,9 +1926,100 @@ class AcpRuntime {
   private toolKeepsTurnOpen(snapshot: AcpToolCallSnapshot): boolean {
     const defer = this.options.options.acpOptions?.deferTurnOnRunningTools;
     if (!defer) return false;
-    return defer.keepsTurnOpen
-      ? defer.keepsTurnOpen(snapshot, { nativeSessionId: this.nativeSessionId || undefined })
-      : true;
+    return defer.keepsTurnOpen ? defer.keepsTurnOpen(snapshot) : true;
+  }
+
+  private async startDeferredToolObserver(): Promise<void> {
+    const observe = this.options.options.acpOptions?.deferTurnOnRunningTools?.observeOpenTools;
+    if (!observe || !this.nativeSessionId || this.closing || this.processFailed) return;
+    const observer = observe({
+      nativeSessionId: this.nativeSessionId,
+      openToolCalls: () => this.openToolCallSnapshots(),
+      terminateToolCall: (toolCallId, state) => this.terminateObservedToolCall(toolCallId, state),
+    });
+    this.deferredToolObserver = observer;
+    await this.syncDeferredToolObserver();
+  }
+
+  private async syncDeferredToolObserver(): Promise<void> {
+    const observer = this.deferredToolObserver;
+    if (!observer || this.closing || this.processFailed || this.deferredRetirement) return;
+    try {
+      await observer.sync();
+    } catch (error) {
+      console.error("Error synchronizing ACP deferred tool observer", error);
+    }
+  }
+
+  private disposeDeferredToolObserver(): void {
+    const observer = this.deferredToolObserver;
+    if (!observer) return;
+    this.deferredToolObserver = null;
+    try {
+      observer.dispose();
+    } catch (error) {
+      console.error("Error disposing ACP deferred tool observer", error);
+    }
+  }
+
+  private openToolCallSnapshots(): AcpToolCallSnapshot[] {
+    const snapshots: AcpToolCallSnapshot[] = [];
+    for (const id of this.liveOpenToolIds) {
+      const snapshot = this.toolCalls.get(id)?.presentation;
+      if (snapshot) snapshots.push(snapshot);
+    }
+    return snapshots;
+  }
+
+  private terminateObservedToolCall(
+    toolCallId: string,
+    state: "completed" | "failed" | "canceled",
+  ): void {
+    if (this.closing || this.processFailed || this.deferredRetirement) return;
+    if (!this.liveOpenToolIds.has(toolCallId)) return;
+    const tool = this.toolCalls.get(toolCallId);
+    if (!tool) return;
+    const current = tool.presentation;
+    if (current.status !== "pending" && current.status !== "in_progress") return;
+    const wasOpenQualifying = this.toolKeepsTurnOpen(current);
+    this.liveOpenToolIds.delete(toolCallId);
+    if (state === "canceled") this.canceledToolCallIds.add(toolCallId);
+    const nextStatus: AcpToolCallSnapshot["status"] =
+      state === "completed" ? "completed" : "failed";
+    const updated: AcpToolCallSnapshot = { ...current, status: nextStatus };
+    this.toolCalls.set(toolCallId, {
+      source: { ...tool.source, status: nextStatus },
+      presentation: updated,
+    });
+    this.emit({
+      type: "timeline.item",
+      sessionId: this.options.boundarySessionId,
+      item: terminalToolItem(toolTimelineItem(current), state),
+    });
+    const active = this.activePrompt;
+    if (active && wasOpenQualifying) {
+      if (state === "canceled") {
+        active.sawObservedCancellation = true;
+      }
+      if (active.deferred) {
+        this.maybeSettleAfterObservedCancellation(active);
+        this.scheduleDeferredSettle();
+      }
+    }
+    this.deferredToolObserver?.notify();
+  }
+
+  private maybeSettleAfterObservedCancellation(active: ActivePrompt): void {
+    if (
+      active.deferred &&
+      active.replyState === "idle" &&
+      active.sawObservedCancellation &&
+      !active.hasPostPromptActivity &&
+      !active.crossedEndTurn &&
+      !this.hasDeferredBlockers()
+    ) {
+      active.replyState = "settled";
+    }
   }
 
   private hasQualifyingOpenTools(): boolean {
@@ -1928,6 +2076,7 @@ class AcpRuntime {
   ): void {
     const active = this.activePrompt;
     if (!active || !this.isPostWirePrompt(active, wireSeq)) return;
+    active.hasPostPromptActivity = true;
     if (kind === "agent_message_chunk") active.replyState = "open";
     else if (active.replyState !== "open") active.replyState = "idle";
     if (active.deferred) this.scheduleDeferredSettle();

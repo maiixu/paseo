@@ -71,7 +71,9 @@ export interface AcpOptions {
     /** Quiet limit after qualifying tools finish if no reply settles via `usage_update`. Defaults to 120_000ms. */
     quietLimitMs?: number;
     /** Predicate deciding whether an open tool call keeps the turn open. Defaults to all running tools. */
-    keepsTurnOpen?: (toolCall: AcpToolCallSnapshot, context?: AcpDeferTurnToolContext) => boolean;
+    keepsTurnOpen?: (toolCall: AcpToolCallSnapshot) => boolean;
+    /** Optional session-scoped observer that reconciles open tools whose termination is not reported on ACP. */
+    observeOpenTools?: (context: AcpDeferredToolObserverContext) => AcpDeferredToolObserver;
   };
   /** An unattended mode that approves ACP allow-once requests in the specified native mode. */
   autoAcceptMode?: {
@@ -81,8 +83,21 @@ export interface AcpOptions {
   };
 }
 
-export interface AcpDeferTurnToolContext {
-  nativeSessionId?: string;
+export interface AcpDeferredToolObserverContext {
+  nativeSessionId: string;
+  /** Returns currently open live tool calls for this session. */
+  openToolCalls(): readonly AcpToolCallSnapshot[];
+  /** Marks an open live tool call as externally terminated and triggers normal deferred-turn transition. */
+  terminateToolCall(toolCallId: string, state: "completed" | "failed" | "canceled"): void;
+}
+
+export interface AcpDeferredToolObserver {
+  /** Reconcile external state asynchronously (for example before deciding whether to defer end_turn). */
+  sync(): Promise<void>;
+  /** Notify the observer that open tool calls or deferred waiting state changed. */
+  notify(): void;
+  /** Stop any watchers or timers when the session closes. */
+  dispose(): void;
 }
 
 export interface AcpContext {

@@ -3047,7 +3047,6 @@ describe("deferTurnOnRunningTools", () => {
         return true;
       },
     });
-    const observedNativeSessionIds: Array<string | undefined> = [];
     const registration = runAcpProvider({
       id: "deferred-daemon",
       label: "Deferred Daemon",
@@ -3056,8 +3055,7 @@ describe("deferTurnOnRunningTools", () => {
         deferTurnOnRunningTools: {
           settleDelayMs: 30,
           quietLimitMs: 500,
-          keepsTurnOpen(toolCall, context) {
-            observedNativeSessionIds.push(context?.nativeSessionId);
+          keepsTurnOpen(toolCall) {
             const input = toolCall.input;
             return !(
               typeof input === "object" &&
@@ -3094,10 +3092,148 @@ describe("deferTurnOnRunningTools", () => {
           event.turnId === "acp:daemon-turn" &&
           event.state === "completed",
       );
-      expect(observedNativeSessionIds).toContain("connector-session");
     } finally {
       await connection.close();
     }
+  });
+
+  it("lets observeOpenTools settle late-terminated tools after usage_update and disposes on close", async () => {
+    const { connector, instances } = connectorHarness({
+      handleRequest(instance, request) {
+        if (request.method !== "session/prompt") return false;
+        instance.notify("session/update", {
+          sessionId: "connector-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "observed-bg",
+            name: "run_command",
+            title: "sleep 30",
+            status: "in_progress",
+          },
+        });
+        instance.respond(request, { stopReason: "end_turn" });
+        return true;
+      },
+    });
+
+    let observerSessionId: string | undefined;
+    let observerContext:
+      | Parameters<
+          NonNullable<
+            NonNullable<
+              NonNullable<
+                Parameters<typeof runAcpProvider>[0]["acpOptions"]
+              >["deferTurnOnRunningTools"]
+            >["observeOpenTools"]
+          >
+        >[0]
+      | undefined;
+    const syncOpenCounts: number[] = [];
+    let notifyCount = 0;
+    let disposeCount = 0;
+
+    const registration = runAcpProvider({
+      id: "deferred-observer",
+      label: "Deferred Observer",
+      connector,
+      acpOptions: {
+        deferTurnOnRunningTools: {
+          settleDelayMs: 30,
+          quietLimitMs: 5_000,
+          observeOpenTools(context) {
+            observerSessionId = context.nativeSessionId;
+            observerContext = context;
+            return {
+              async sync() {
+                syncOpenCounts.push(context.openToolCalls().length);
+              },
+              notify() {
+                notifyCount += 1;
+              },
+              dispose() {
+                disposeCount += 1;
+              },
+            };
+          },
+        },
+      },
+    });
+    const connection = await registration.connect({
+      versions: [1],
+      capabilities: ["prompt.message"],
+    });
+    const events: ProviderEvent[] = [];
+    connection.onEvent((event) => events.push(event));
+    try {
+      await connection.send(openInput());
+      await waitForEvent(events, (event) => event.type === "session.ready");
+      expect(observerSessionId).toBe("connector-session");
+      expect(syncOpenCounts).toEqual([0]);
+
+      await connection.send({
+        type: "session.prompt",
+        sessionId: "session-1",
+        prompt: {
+          clientMessageId: "observer-turn",
+          delivery: "auto",
+          input: { type: "message", content: [{ type: "text", text: "run job" }] },
+        },
+      });
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "timeline.item" &&
+          event.item.type === "tool_call" &&
+          event.item.id === "observed-bg",
+      );
+      await new Promise((resolve) => setTimeout(resolve, 40));
+
+      // Post-prompt reply and usage_update arrive BEFORE the external cancellation is detected.
+      instances[1].notify("session/update", {
+        sessionId: "connector-session",
+        update: textChunk("Canceled it."),
+      });
+      instances[1].notify("session/update", {
+        sessionId: "connector-session",
+        update: { sessionUpdate: "usage_update", used: 120, size: 1000 },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 60));
+
+      // Turn is still deferred while observed-bg remains open.
+      expect(
+        events.some(
+          (event) =>
+            event.type === "session.turn" &&
+            event.turnId === "acp:observer-turn" &&
+            event.state !== "started",
+        ),
+      ).toBe(false);
+
+      // Late external cancellation settles the turn within settleDelayMs with no further ACP events.
+      observerContext?.terminateToolCall("observed-bg", "canceled");
+      await waitForEvent(
+        events,
+        (event) =>
+          event.type === "session.turn" &&
+          event.turnId === "acp:observer-turn" &&
+          event.state === "completed",
+      );
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "timeline.item",
+          item: expect.objectContaining({
+            type: "tool_call",
+            id: "observed-bg",
+            status: "canceled",
+          }),
+        }),
+      );
+      expect(syncOpenCounts).toEqual([0, 1]);
+      expect(notifyCount).toBeGreaterThan(0);
+    } finally {
+      await connection.close();
+    }
+    expect(disposeCount).toBe(1);
   });
 
   it("settles via quietLimitMs when a background tool finishes with no follow-up reply", async () => {
