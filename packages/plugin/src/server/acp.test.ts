@@ -7440,4 +7440,41 @@ describe("deferTurnOnRunningTools", () => {
     });
     await connection.close();
   });
+
+  it("sends default and overridden clientInfo on ACP initialize", async () => {
+    const defaultSeen: unknown[] = [];
+    const defaultHarness = connectorHarness({
+      handleRequest(instance, request) {
+        if (request.method === "initialize") {
+          defaultSeen.push((request.params as { clientInfo?: unknown } | undefined)?.clientInfo);
+        }
+        return false;
+      },
+    });
+    const defaultConn = await runAcpProvider({
+      id: "default-client-info",
+      label: "Default Client Info",
+      connector: defaultHarness.connector,
+    }).connect({ versions: [1], capabilities: ["prompt.message"] });
+    await defaultConn.close();
+    expect(defaultSeen).toEqual([{ name: "paseo", version: "1" }]);
+
+    const customSeen: unknown[] = [];
+    const customHarness = connectorHarness({
+      handleRequest(instance, request) {
+        if (request.method === "initialize") {
+          customSeen.push((request.params as { clientInfo?: unknown } | undefined)?.clientInfo);
+        }
+        return false;
+      },
+    });
+    const customConn = await runAcpProvider({
+      id: "custom-client-info",
+      label: "Custom Client Info",
+      connector: customHarness.connector,
+      acpOptions: { clientInfo: { name: "t3-code", version: "1" } },
+    }).connect({ versions: [1], capabilities: ["prompt.message"] });
+    await customConn.close();
+    expect(customSeen).toEqual([{ name: "t3-code", version: "1" }]);
+  });
 });

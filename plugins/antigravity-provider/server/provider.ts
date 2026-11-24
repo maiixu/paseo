@@ -117,6 +117,9 @@ export function createAntigravityProvider(
     icon: "icon.svg",
     command: ["agy", "acp", "--disable-telemetry"],
     acpOptions: {
+      // agy_acp_server 1.5.0 gates third-party CCPA models (e.g. Claude Opus/Sonnet 5.5) behind
+      // an initialize.clientInfo allowlist; `t3-code` only enables third-party models.
+      clientInfo: { name: "t3-code", version: "1" },
       // agy 1.5.14 lists thinking options for the selected model only, and none for Orchestrator.
       perModelThinkingOptions: true,
       waitForInitialCommands: true,

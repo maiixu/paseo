@@ -526,7 +526,7 @@ class AcpRuntime {
           runtime.connection.initialize({
             protocolVersion: PROTOCOL_VERSION,
             clientCapabilities: {},
-            clientInfo: { name: "paseo", version: "1" },
+            clientInfo: options.options.acpOptions?.clientInfo ?? { name: "paseo", version: "1" },
           }),
         ),
         options.options.acpOptions?.startupTimeoutMs ?? 10_000,

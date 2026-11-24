@@ -46,6 +46,11 @@ export type AcpConnector = () => AcpStream | Promise<AcpStream>;
 
 export interface AcpOptions {
   protocol?: "auto" | "v1";
+  /** Optional ACP initialize clientInfo override. Defaults to `{ name: "paseo", version: "1" }`. */
+  clientInfo?: {
+    name: string;
+    version: string;
+  };
   startupTimeoutMs?: number;
   /** Global discovery initializes ACP but returns an empty catalog without opening a session. */
   workspaceOnlyCatalog?: boolean;

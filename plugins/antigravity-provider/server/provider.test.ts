@@ -1560,3 +1560,30 @@ it("does not let pre-existing historical cancellations on session open cancel a 
     await connection.close();
   }
 });
+
+it("initializes ACP with t3-code clientInfo so third-party models are exposed", async () => {
+  const { directory, launch } = await launchAgent(`
+    const { appendFileSync } = require("node:fs");
+    const { createInterface } = require("node:readline");
+    const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\\n");
+    createInterface({ input: process.stdin }).on("line", (line) => {
+      appendFileSync(process.env.CAPTURE, line + "\\n");
+      const { id, method } = JSON.parse(line);
+      if (method === "initialize") {
+        send({ id, result: { protocolVersion: 1, agentCapabilities: {} } });
+      }
+    });
+  `);
+  const capture = path.join(directory, "capture.ndjson");
+  const provider = createAntigravityProvider();
+  const status = await provider.status!({
+    launch: { ...launch, env: { ...launch.env, CAPTURE: capture } },
+  });
+  expect(status.available).toBe(true);
+  const messages = (await readFile(capture, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  const init = messages.find((msg) => msg.method === "initialize");
+  expect(init?.params?.clientInfo).toEqual({ name: "t3-code", version: "1" });
+});
